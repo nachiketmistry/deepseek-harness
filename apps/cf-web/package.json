@@ -1,0 +1,27 @@
+{
+  "name": "@deepseek-ai/dsh-cf-web",
+  "description": "The dsh web GUI on Cloudflare: Worker entry, Host Durable Object, Sandbox container binding, and the workerd bundle of the host tree",
+  "version": "0.1.1-rc.1",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+    "directory": "apps/cf-web"
+  },
+  "type": "module",
+  "scripts": {
+    "gate0": "node scripts/gate0.mjs",
+    "build": "node scripts/build.mjs",
+    "test:workerd": "node scripts/build.mjs --probe && vitest run --config vitest.workerd.config.ts",
+    "deploy": "node scripts/build.mjs && wrangler deploy",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "@cloudflare/workers-types": "^5.20260821.1",
+    "esbuild": "^0.28.2",
+    "vitest": "^4.1.8",
+    "wrangler": "^4.125.0"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "dsh-cf-web",
+  // Prebuilt by scripts/build.mjs: workspace packages resolve to their built
+  // lib/ through a resolver wrangler's bundler cannot express.
+  "main": "dist/worker.js",
+  "compatibility_date": "2026-08-20",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "observability": { "enabled": true }
+}

@@ -1,0 +1,13 @@
+{
+  // A Cloudflare Workers program, not a member of the host or client aggregate:
+  // workerd global types replace Node's, so one program cannot hold both.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "incremental": false,
+    "noEmit": true,
+    "rewriteRelativeImportExtensions": false,
+    "types": ["@cloudflare/workers-types/experimental", "@cloudflare/vitest-pool-workers/types"]
+  },
+  "include": ["src", "tests"]
+}

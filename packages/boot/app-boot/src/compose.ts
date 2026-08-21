@@ -52,6 +52,14 @@ export function tableModuleLoader(modules: ModuleTable): TableModuleLoader {
   }
 }
 
+/** Render a load failure with every aggregated member, so a multi-row failure names each row. */
+function describeFailure(cause: unknown): string {
+  if (cause instanceof AggregateError) {
+    return `${cause.message}:\n${cause.errors.map(error => `  - ${describeFailure(error)}`).join('\n')}`
+  }
+  return cause instanceof Error ? cause.stack ?? cause.message : String(cause)
+}
+
 /** Options for {@link bootEntries}. */
 export interface BootEntriesOptions {
   /** Plugin modules by specifier; every row `name` must be present. */
@@ -96,7 +104,6 @@ export async function bootEntries(
     return ctx
   } catch (cause) {
     await ctx.fiber.dispose()
-    const detail = cause instanceof Error ? cause.message : String(cause)
-    throw new Error(`${binName}: ${stage}: ${detail}`, { cause })
+    throw new Error(`${binName}: ${stage}: ${describeFailure(cause)}`, { cause })
   }
 }

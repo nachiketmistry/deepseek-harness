@@ -6,6 +6,7 @@
 
 import { Context } from '@deepseek-ai/cordis'
 import { constants as bufferConstants } from 'node:buffer'
+import { mkdir } from 'node:fs/promises'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import z from '@deepseek-ai/schemastery'
@@ -161,6 +162,15 @@ export class LocalFileSystem extends FileSystem {
       ...(entry.version !== undefined ? { version: entry.version } : {}),
       ...(entry.size !== undefined ? { size: entry.size } : {}),
     }))
+  }
+
+  override async ensureDirectory(path: string, opts?: { cwd?: string; signal?: AbortSignal }): Promise<FsTarget> {
+    const absolute = resolve(opts?.cwd ?? this.config.cwd, path)
+    await mkdir(absolute, { recursive: true })
+    const target = await this.resolve(absolute, opts)
+    const info = await this.stat(target, opts?.signal)
+    if (info?.type !== 'directory') throw new Error(`fs-local: ${target.displayPath} exists and is not a directory`)
+    return target
   }
 
   override async writeText(

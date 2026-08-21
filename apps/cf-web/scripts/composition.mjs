@@ -42,7 +42,6 @@ export const CF_EXCLUDED_ROWS = new Map([
   ['@deepseek-ai/dsh-pwsh-sandbox', 'Windows only'],
   ['@deepseek-ai/dsh-tool-pwsh', 'Windows only'],
   ['@deepseek-ai/dsh-session-persistence-jsonl', 'disk JSONL; replaced by persistence-do'],
-  ['@deepseek-ai/dsh-session-query-sqlite', 'node:sqlite; openAt never on web already'],
   ['@deepseek-ai/dsh-storage-json', 'disk JSON; replaced by storage-do'],
   ['@deepseek-ai/dsh-settings-file', 'disk YAML + chokidar; replaced by settings-do'],
   ['@deepseek-ai/dsh-credentials-local', 'disk .env + chokidar; replaced by credentials-secrets'],

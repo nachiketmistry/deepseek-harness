@@ -6,7 +6,6 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { stat } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
@@ -16,7 +15,8 @@ import { WorkspaceEntity } from './entity.ts'
 import type { WorkspaceEntityHost } from './entity.ts'
 
 export { WorkspaceMoveInvalidError } from './entity.ts'
-import { realpathNormalize } from './paths.ts'
+import { realpathDirectory } from './paths.ts'
+import type {} from '@deepseek-ai/dsh-fs'
 import { workspaceDomainSpec } from './spec.ts'
 import type { WorkspaceDomainState, WorkspaceRecord } from './spec.ts'
 import type { Workspace, WorkspaceId as WorkspaceIdBrand } from './types.ts'
@@ -24,7 +24,7 @@ import type { Workspace, WorkspaceId as WorkspaceIdBrand } from './types.ts'
 export type { Workspace } from './types.ts'
 export { workspaceDomainState, workspaceRecord, workspaceDomainSpec } from './spec.ts'
 export type { WorkspaceDomainState, WorkspaceRecord } from './spec.ts'
-export { realpathNormalize } from './paths.ts'
+export { realpathDirectory } from './paths.ts'
 
 /** Identifies one workspace record (see `src/types.ts` for the brand rationale). */
 export type WorkspaceId = WorkspaceIdBrand
@@ -90,7 +90,7 @@ const compareHeaders = (left: SessionHeader, right: SessionHeader): number =>
  * history and commit the initialized marker.
  */
 export class WorkspaceRegistry extends Service {
-  static inject = ['storageDomain', 'sessionPersistence']
+  static inject = ['storageDomain', 'sessionPersistence', 'fs']
 
   private table?: KvTable<WorkspaceId, WorkspaceRecord>
   private global?: DomainGlobal<WorkspaceDomainState>
@@ -102,6 +102,7 @@ export class WorkspaceRegistry extends Service {
   private operationTail: Promise<void> = Promise.resolve()
 
   private readonly host: WorkspaceEntityHost = {
+    fs: this.ctx.fs,
     table: () => this.requireTable(),
     sessionPath: id => this.sessionPaths.get(id),
     readSessionHeader: id => this.readSessionHeader(id),
@@ -156,10 +157,7 @@ export class WorkspaceRegistry extends Service {
   // drop the parameter with its @param clause and the `create(path, title?)`
   // lines in this package's README pair.
   async create(path: string, title?: string): Promise<Workspace> {
-    const canonical = await realpathNormalize(path)
-    if (!(await stat(canonical)).isDirectory()) {
-      throw new Error(`cannot create a workspace at '${canonical}': path is not a directory`)
-    }
+    const canonical = await realpathDirectory(this.ctx.fs, path)
     return await this.enqueueOperation(() => this.createCanonical(canonical, title))
   }
 
@@ -275,7 +273,7 @@ export class WorkspaceRegistry extends Service {
    * @returns the workspace owning the canonical path, when one exists.
    */
   async resolveByPath(path: string): Promise<Workspace | undefined> {
-    const canonical = await realpathNormalize(path)
+    const canonical = await realpathDirectory(this.ctx.fs, path)
     for (const entity of this.entities.values()) {
       if (entity.path === canonical) return entity
     }
@@ -577,11 +575,7 @@ export class WorkspaceRegistry extends Service {
       return
     }
     try {
-      const path = await realpathNormalize(header.cwd)
-      if (!(await stat(path)).isDirectory()) {
-        this.invalidSessionPaths.set(header.id, `cwd '${header.cwd}' is not a directory`)
-        return
-      }
+      const path = await realpathDirectory(this.ctx.fs, header.cwd)
       this.sessionPaths.set(header.id, path)
       this.invalidSessionPaths.delete(header.id)
     } catch {

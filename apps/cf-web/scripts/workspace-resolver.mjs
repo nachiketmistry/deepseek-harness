@@ -16,7 +16,7 @@ const BARE_BUILTINS = new Set([
   'timers/promises', 'tls', 'tty', 'url', 'util', 'util/types', 'v8', 'vm', 'worker_threads', 'zlib',
 ])
 
-function readPackage(dir) {
+export function readPackage(dir) {
   return JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
 }
 
@@ -24,7 +24,7 @@ function readPackage(dir) {
  * Index every workspace package by name.
  * @returns {Map<string, string>} package name -> absolute package directory.
  */
-function workspacePackages() {
+export function workspacePackages() {
   const packages = new Map()
   const add = (dir) => {
     if (!existsSync(join(dir, 'package.json'))) return
@@ -52,7 +52,7 @@ function workspacePackages() {
  * @param {string} subpath - subpath without the leading `./` (`''` for the root).
  * @returns {string | undefined} absolute target path, or undefined when not exported.
  */
-function exportTarget(dir, subpath) {
+export function exportTarget(dir, subpath) {
   const pkg = readPackage(dir)
   const key = subpath === '' ? '.' : `./${subpath}`
   const exportsMap = pkg.exports ?? {}

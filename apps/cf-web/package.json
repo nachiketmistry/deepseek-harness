@@ -15,7 +15,7 @@
     "gate0": "node scripts/gate0.mjs",
     "build": "node scripts/build.mjs",
     "test:workerd": "node scripts/build-probe.mjs && vitest run --config vitest.workerd.config.ts",
-    "deploy": "node scripts/build.mjs && wrangler deploy",
+    "deploy": "node scripts/build.mjs && wrangler deploy --containers-rollout=immediate",
     "typecheck": "tsc -p tsconfig.json"
   },
   "license": "MIT",
@@ -23,11 +23,26 @@
     "@cloudflare/vitest-pool-workers": "^0.22.0",
     "@cloudflare/workers-types": "^5.20260821.1",
     "esbuild": "^0.28.2",
+    "js-yaml": "^4.2.0",
     "vitest": "^4.1.8",
     "wrangler": "^4.125.0"
   },
   "files": [
     "dist/worker.js",
-    "wrangler.jsonc"
-  ]
+    "dist/assets",
+    "dist/generated",
+    "wrangler.jsonc",
+    "Dockerfile"
+  ],
+  "dependencies": {
+    "@cloudflare/sandbox": "0.13.0-next.738.2",
+    "@deepseek-ai/dsh-app-boot": "workspace:^",
+    "@deepseek-ai/dsh-cf-bindings": "workspace:^",
+    "@deepseek-ai/dsh-webserver-cf": "workspace:^",
+    "@deepseek-ai/dsh-client-bundle-source-static": "workspace:^",
+    "@deepseek-ai/dsh-agent-presets-static": "workspace:^",
+    "@deepseek-ai/cordis": "workspace:^",
+    "@deepseek-ai/cordis-plugin-loader": "workspace:^",
+    "@deepseek-ai/dsh-typert-artifacts-static": "workspace:^"
+  }
 }

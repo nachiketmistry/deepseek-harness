@@ -50,14 +50,21 @@ export const hostListDirectoryValueSchema = z.object({
   truncated: z.boolean(),
 }) satisfies z.ZodType<Wire<ResponseValue<'host.listDirectory'>>>
 
-/** host.createDirectory request payload: name must be one plain path segment. */
+/** A git clone URL (`https://`, `ssh://`, `git://`, or scp-like `user@host:path`). */
+const GIT_URL = /^(?:https?|ssh|git):\/\/\S+$|^[\w.-]+@[\w.-]+:\S+$/u
+
+/**
+ * host.createDirectory request payload: name must be one plain path segment,
+ * or a git clone URL for a browse backend that materializes a directory by
+ * cloning (the container picker; a disk picker refuses the URL form).
+ */
 export const hostCreateDirectoryRequestSchema = z.object({
   path: z.string(),
   name: z.string(),
 }).refine(
-  payload => payload.name.trim() !== '' && payload.name !== '.' && payload.name !== '..'
-    && !/[/\\]/.test(payload.name),
-  { message: 'host.createDirectory requires a single non-blank path segment name' },
+  payload => GIT_URL.test(payload.name) || (payload.name.trim() !== '' && payload.name !== '.' && payload.name !== '..'
+    && !/[/\\]/.test(payload.name)),
+  { message: 'host.createDirectory requires a single non-blank path segment name or a git clone URL' },
 ) satisfies z.ZodType<Wire<RequestPayload<'host.createDirectory'>>>
 
 /** host.createDirectory response value: the created directory's absolute path. */

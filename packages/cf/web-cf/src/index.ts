@@ -1,0 +1,93 @@
+/**
+ * @deepseek-ai/dsh-web-cf — the browser-surface glue on Cloudflare. Claims
+ * the webserver fallback seat over a Workers Assets binding (the built
+ * frontend dist), rendering `index.html` through the carrier's injection
+ * table, and registers the model-visible surface context: the
+ * `app:web-surface` prompt section and the `DSH_WEB_URL` bash variable,
+ * both naming the deployment's public URL.
+ * @module @deepseek-ai/dsh-web-cf
+ */
+
+import type { Context } from '@deepseek-ai/cordis'
+import z from '@deepseek-ai/schemastery'
+import type {} from '@deepseek-ai/dsh-cf-bindings'
+import type {} from '@deepseek-ai/dsh-host-webserver'
+import type {} from '@deepseek-ai/dsh-system-prompt'
+import type {} from '@deepseek-ai/dsh-shell-env'
+
+/** Stable Cordis plugin name. */
+export const name = 'web-cf'
+
+/** Services required before the glue mounts. */
+export const inject = ['webServer', 'cf']
+
+/** Plugin config. */
+export interface Config {
+  /** The Workers Assets binding name. */
+  assets: string
+  /** The public origin the browser loads from, for the surface context. */
+  publicUrl: string
+  /** Register the surface prompt section and the bash variable. */
+  surfaceContext: boolean
+}
+
+export const Config: z<Config> = z.object({
+  assets: z.string().default('ASSETS'),
+  publicUrl: z.string().required(),
+  surfaceContext: z.boolean().default(true),
+})
+
+/** The structural subset of a Workers Assets binding. */
+interface AssetsBinding {
+  fetch(request: Request | string): Promise<Response>
+}
+
+const DSH_WEB_URL = 'DSH_WEB_URL'
+
+/** Model-visible orientation for sessions created through the deployed GUI. */
+function webSurfacePrompt(webUrl: string): string {
+  return `You are interacting with the user through the DeepSeek Harness Web GUI at ${webUrl}, deployed on Cloudflare. `
+    + 'When the user refers to "this page", "this GUI", or "this app" without naming another target, they mean this GUI. '
+    + 'The browser provides no implicit DOM, route, or screenshot context. '
+    + 'Your tools run inside a sandbox container whose /workspace holds the user\'s git projects; the GUI itself is not served from that container, so starting a server there does not update this GUI.'
+}
+
+/**
+ * Mount the glue: the assets fallback and the surface context.
+ * @param ctx - plugin context carrying the webServer and cf services.
+ * @param config - validated {@link Config}.
+ */
+export function apply(ctx: Context, config: Config): void {
+  const assets = ctx.cf.binding(config.assets) as AssetsBinding
+  ctx.effect(() => ctx.webServer.registerFallback(async (request) => {
+    if (request.method !== 'GET' && request.method !== 'HEAD') return new Response(null, { status: 405 })
+    const url = new URL(request.url)
+    if (url.pathname === '/' || url.pathname === '/index.html') {
+      const index = await assets.fetch(new URL('/index.html', url).toString())
+      if (!index.ok) return new Response(`web-cf: index.html missing from assets (${String(index.status)})`, { status: 500 })
+      const html = ctx.webServer.renderIndex(await index.text())
+      return new Response(request.method === 'HEAD' ? null : html, {
+        status: 200,
+        headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
+      })
+    }
+    return assets.fetch(request)
+  }), 'web-cf: fallback seat')
+  if (!config.surfaceContext) return
+  ctx.inject(['systemPrompt'], (promptCtx) => {
+    promptCtx.systemPrompt.section({
+      name: 'app:web-surface',
+      order: -98,
+      text: () => webSurfacePrompt(config.publicUrl),
+    })
+  })
+  ctx.inject(['shellEnv'], (runtimeCtx) => {
+    runtimeCtx.shellEnv.register({
+      name: 'web-runtime',
+      variables: {
+        [DSH_WEB_URL]: { description: 'Canonical public URL of the DeepSeek Harness Web GUI serving this session.' },
+      },
+      resolve: () => ({ [DSH_WEB_URL]: config.publicUrl }),
+    })
+  })
+}

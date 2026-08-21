@@ -59,6 +59,14 @@ export interface Config {
    * @default 1024
    */
   coldBlankProbeMaxBytes?: number
+  /**
+   * Default project directory for sessions whose create request carries no
+   * cwd, and the directory `host.describe` reports. Absent, the host process's
+   * working directory.
+   */
+  cwd?: string
+  /** The home directory `host.describe` reports; absent, the host account's. */
+  home?: string
 }
 
 /**
@@ -68,7 +76,7 @@ export interface Config {
  */
 export class ApiProxyService extends Service implements ApiProxy {
   static inject = [
-    'agentDefaultModel', 'agents', 'attachments', 'directoryPicker', 'llm', 'sessions', 'subagents', 'sessionQuery',
+    'agentDefaultModel', 'agents', 'attachments', 'directoryPicker', 'fs', 'llm', 'sessions', 'subagents', 'sessionQuery',
     'tools', 'userQuestions', 'workspaceRegistry',
   ]
 
@@ -77,6 +85,8 @@ export class ApiProxyService extends Service implements ApiProxy {
     sessionExportCompressionLevel: z.number().step(1).min(0).max(9)
       .default(DEFAULT_SESSION_LOG_COMPRESSION_LEVEL) as z<SessionLogCompressionLevel>,
     coldBlankProbeMaxBytes: z.natural().default(DEFAULT_COLD_BLANK_PROBE_MAX_BYTES),
+    cwd: z.string(),
+    home: z.string(),
   })
 
   readonly sessions: ApiProxy['sessions']
@@ -98,7 +108,8 @@ export class ApiProxyService extends Service implements ApiProxy {
     const api = createApiProxy(ctx, {
       defaultModelSelection: () => ctx.agentDefaultModel.currentSelection(),
       saveDefaultModelSelection: selection => ctx.agentDefaultModel.saveSelection(selection),
-      cwd: process.cwd(),
+      cwd: config.cwd ?? process.cwd(),
+      ...config.home === undefined ? {} : { home: config.home },
       ...config.nativeOpen === undefined ? {} : { canOpenPath: () => config.nativeOpen as boolean },
       ...(config.sessionExportCompressionLevel === undefined
         ? {}

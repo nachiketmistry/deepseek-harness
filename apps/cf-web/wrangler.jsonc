@@ -4,8 +4,26 @@
   // Prebuilt by scripts/build.mjs: workspace packages resolve to their built
   // lib/ through a resolver wrangler's bundler cannot express.
   "main": "dist/worker.js",
+  "no_bundle": true,
   "compatibility_date": "2026-08-20",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
-  "observability": { "enabled": true }
+  "observability": { "enabled": true },
+  "assets": { "directory": "dist/assets", "binding": "ASSETS", "run_worker_first": true },
+  "durable_objects": {
+    "bindings": [
+      { "name": "HOST", "class_name": "HostObject" },
+      { "name": "SANDBOX", "class_name": "Sandbox" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["HostObject", "Sandbox"] }
+  ],
+  "containers": [
+    { "class_name": "Sandbox", "image": "./Dockerfile", "max_instances": 1, "instance_type": "standard" }
+  ],
+  "r2_buckets": [
+    { "binding": "ATTACHMENTS", "bucket_name": "dsh-cf-web-attachments" },
+    { "binding": "SPILL", "bucket_name": "dsh-cf-web-spill" }
+  ]
 }

@@ -4,7 +4,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { mkdir, stat } from 'node:fs/promises'
+import { stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname } from 'node:path'
 import { z as zod } from 'zod'
@@ -103,6 +103,7 @@ import type {
 } from '@deepseek-ai/dsh-user-questions'
 import { UserQuestionError } from '@deepseek-ai/dsh-user-questions'
 import { DirectoryPickerError } from '@deepseek-ai/dsh-host-directory-picker'
+import type {} from '@deepseek-ai/dsh-fs'
 import {
   ApiRemoteSessionNotFound as SessionNotFound,
   ApiRemoteSubagentSessionOwnership as SubagentSessionOwnership,
@@ -602,6 +603,8 @@ export interface ApiProxyDefaults {
   saveDefaultModelSelection?: (selection: ModelSelection) => Promise<void>
   /** Default project directory for new sessions whose create request carries no cwd. */
   cwd: string
+  /** The home directory `host.describe` reports; defaults to the host account's. */
+  home?: string
   /** Native open-with-default-application; injectable for carrier tests. */
   openPath?: (path: string, signal: AbortSignal) => Promise<void>
   /** Native text-editor handoff; injectable for settings-document tests. */
@@ -1613,7 +1616,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         }
 
         try {
-          await mkdir(cwd, { recursive: true })
+          await ctx.fs.ensureDirectory(cwd)
         } catch (error: unknown) {
           throw new Error(`failed to ensure project directory "${cwd}": ${String(error)}`, { cause: error })
         }
@@ -2863,7 +2866,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           provider: selection.provider,
           model: selection.model,
           attachedSessions: ctx.agents.list().length,
-          home: homedir(),
+          home: defaults.home ?? homedir(),
           canOpenPath: canOpenPaths(),
         }))
       },

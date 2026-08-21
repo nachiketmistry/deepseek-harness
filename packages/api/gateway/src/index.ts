@@ -38,7 +38,13 @@ interface ResolvedBinding {
 
 type ConnectionRpcResult = Awaited<ReturnType<ConnectionRpcHandler>>
 type ConnectionRpcError = Extract<ConnectionRpcResult, { readonly ok: false }>['error']
-const NEVER_ABORTED_SIGNAL = new AbortController().signal
+// Built on first use, not at module load: a Workers isolate forbids constructing
+// an AbortController in global scope (it allocates a random identity).
+let neverAbortedSignal: AbortSignal | undefined
+function neverAborted(): AbortSignal {
+  neverAbortedSignal ??= new AbortController().signal
+  return neverAbortedSignal
+}
 
 /** Dispatch failure produced outside the invoked business method. */
 export class TypertGatewayError extends Error {
@@ -158,7 +164,7 @@ export class TypertGatewayService extends Service implements TypertGateway {
     validateBinding(receiver, descriptor.service, descriptor.namespace, endpoint)
     const args = await Promise.all(descriptor.parameters.map(parameter =>
       this.resolveParameter(parameter, request.args, endpoint)))
-    if (descriptor.cancellation !== undefined) args.push(request.signal ?? NEVER_ABORTED_SIGNAL)
+    if (descriptor.cancellation !== undefined) args.push(request.signal ?? neverAborted())
     const implementation = descriptor.implementation ?? descriptor.method
     const method = Reflect.get(receiver, implementation) as unknown
     if (typeof method !== 'function') {

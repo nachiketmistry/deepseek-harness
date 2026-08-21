@@ -2,12 +2,13 @@
 
 English | [中文](README.zh.md)
 
-The host side of the dsh web GUI: the API gateway every client shape shares, and the plain HTTP server it rides on. The browser side lives in [`client/`](../client/README.md); the composed application is [`apps/cli`](../../apps/cli/README.md) booting the [`dsh-base` bundle](../bundle/base/cordis.patch.yml) serving [`apps/web`](../../apps/web/). All **product** packages.
+The host side of the dsh web GUI: the API gateway every client shape shares, and the web carrier it rides on. The browser side lives in [`client/`](../client/README.md); the composed application is [`apps/cli`](../../apps/cli/README.md) booting the [`dsh-base` bundle](../bundle/base/cordis.patch.yml) serving [`apps/web`](../../apps/web/). All **product** packages.
 
 | Package | Role | ctx key |
 |---|---|---|
 | [`apiproxy/`](apiproxy/README.md) | Shared host API gateway and wire contract | `ctx.apiProxy` |
-| [`webserver/`](webserver/README.md) | HTTP route carrier | `ctx.webServer` |
+| [`webserver/`](webserver/README.md) | Web carrier Service Definition: Fetch-dispatched HTTP and WebSocket routes | `ctx.webServer` |
+| [`webserver-node/`](webserver-node/README.md) | Node carrier provider over `node:http` and `ws` | registers `ctx.webServer` |
 | [`frontend-static/`](frontend-static/README.md) | SPA dist server on the webserver fallback seat | consumes `ctx.webServer` |
 | [`directory-picker/`](directory-picker/README.md) | Workspace-directory picking seam | `ctx.directoryPicker` |
 | [`directory-picker-native/`](directory-picker-native/README.md) | Native directory-picker backend and browser interaction | registers `ctx.directoryPicker` |

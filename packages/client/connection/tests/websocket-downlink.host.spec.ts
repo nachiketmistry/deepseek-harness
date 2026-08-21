@@ -1,23 +1,48 @@
-import { once } from 'node:events'
-import { createServer } from 'node:http'
-import type { AddressInfo } from 'node:net'
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import WebSocket from 'ws'
+/** Behavior of the host-side frame pump over the carrier's accepted socket. */
+
+import { describe, expect, it, vi } from 'vitest'
+import { WEBSOCKET_OPEN, type WebServerSocket } from '@deepseek-ai/dsh-host-webserver'
 import type {
   ApiProxy, HostFrame, MuxFrame, RpcRequest, ServerRequest,
 } from '@deepseek-ai/dsh-host-apiproxy/api'
 import { RpcId } from '@deepseek-ai/dsh-host-apiproxy/api'
-import { HOST_EVENTS_PATH, MUX_EVENTS_PATH } from '../src/api-path.ts'
 import { WebSocketDownlinks } from '../src/websocket-downlink.ts'
 
 type MuxSource = (signal: AbortSignal) => AsyncIterable<RpcRequest<MuxFrame>>
 type HostSource = (signal: AbortSignal) => AsyncIterable<RpcRequest<HostFrame>>
 
-const running: (() => Promise<void>)[] = []
+const WEBSOCKET_CLOSED = 3
 
-afterEach(async () => {
-  await Promise.all(running.splice(0).map(close => close()))
-})
+/** An accepted socket as a provider hands it over: records frames and close calls, dispatches events. */
+class FakeSocket implements WebServerSocket {
+  readyState = WEBSOCKET_OPEN
+  readonly frames: ServerRequest[] = []
+  readonly closes: { code: number | undefined; reason: string | undefined }[] = []
+  private readonly listeners = new Map<string, ((event: { data: unknown }) => void)[]>()
+
+  send(data: string | ArrayBuffer | ArrayBufferView): void {
+    if (typeof data !== 'string') throw new TypeError('the downlink sends text frames only')
+    this.frames.push(JSON.parse(data) as ServerRequest)
+  }
+
+  close(code?: number, reason?: string): void {
+    this.closes.push({ code, reason })
+    if (this.readyState === WEBSOCKET_CLOSED) return
+    this.readyState = WEBSOCKET_CLOSED
+    this.dispatch('close', { data: undefined })
+  }
+
+  addEventListener(type: string, listener: (event: { data: unknown }) => void): void {
+    const list = this.listeners.get(type) ?? []
+    list.push(listener)
+    this.listeners.set(type, list)
+  }
+
+  /** Deliver one event as the platform would. */
+  dispatch(type: 'message' | 'close' | 'error', event: { data: unknown }): void {
+    for (const listener of this.listeners.get(type) ?? []) listener(event)
+  }
+}
 
 function untilAbort(signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.resolve()
@@ -39,244 +64,179 @@ function api(mux: MuxSource, host: HostSource): ApiProxy {
   } as ApiProxy
 }
 
-async function serve(downlinks: WebSocketDownlinks): Promise<{
-  origin: string
-  close: () => Promise<void>
-}> {
-  const server = createServer()
-  server.on('upgrade', (request, socket, head) => {
-    const pathname = new URL(request.url ?? '/', 'http://dsh.internal').pathname
-    if (pathname === MUX_EVENTS_PATH) downlinks.handleMux(request, socket, head)
-    else if (pathname === HOST_EVENTS_PATH) downlinks.handleHost(request, socket, head)
-    else socket.destroy()
-  })
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-  const port = (server.address() as AddressInfo).port
+/** A source that stays open until aborted, reporting the signal it was given and when it finished. */
+function observed<F>(prelude?: RpcRequest<F>): {
+  source: (signal: AbortSignal) => AsyncIterable<RpcRequest<F>>
+  state: { signal?: AbortSignal; finished: boolean }
+} {
+  const state: { signal?: AbortSignal; finished: boolean } = { finished: false }
   return {
-    origin: `ws://127.0.0.1:${String(port)}`,
-    close: async () => {
-      await downlinks.close()
-      await new Promise<void>(resolve => server.close(() => { resolve() }))
+    state,
+    source: async function * (signal) {
+      state.signal = signal
+      try {
+        if (prelude !== undefined) yield prelude
+        await untilAbort(signal)
+      } finally {
+        state.finished = true
+      }
     },
   }
 }
 
-function read(socket: WebSocket): Promise<ServerRequest> {
-  return once(socket, 'message').then(([data]) => JSON.parse(String(data)) as ServerRequest)
-}
-
-async function acceptedSocket(downlinks: WebSocketDownlinks): Promise<WebSocket> {
-  const server = (downlinks as unknown as { server: { clients: Set<WebSocket> } }).server
-  let accepted: WebSocket | undefined
-  await vi.waitFor(() => {
-    accepted = server.clients.values().next().value
-    expect(accepted).toBeDefined()
-  })
-  return accepted as WebSocket
-}
-
-describe('WebSocket downlinks', () => {
-  it('carries mux and host over independent downstream sockets and cancels each source on close', async () => {
-    let muxAborted = false
-    let hostAborted = false
-    const downlinks = new WebSocketDownlinks(api(
-      async function * (signal) {
-        try {
-          yield {
-            rpcId: RpcId('mux-1'),
-            payload: { type: 'session/subscribed', sessionId: 'session-1' as never, lastSeq: 4 },
-          }
-          await untilAbort(signal)
-        } finally {
-          muxAborted = true
-        }
-      },
-      async function * (signal) {
-        try {
-          yield { rpcId: RpcId('host-1'), payload: { type: 'host/remote-event', event: 'commands/change', args: [] } }
-          await untilAbort(signal)
-        } finally {
-          hostAborted = true
-        }
-      },
-    ))
-    const host = await serve(downlinks)
-    running.push(host.close)
-
-    const mux = new WebSocket(`${host.origin}${MUX_EVENTS_PATH}`)
-    const hostSocket = new WebSocket(`${host.origin}${HOST_EVENTS_PATH}`)
-    const muxFrame = read(mux)
-    const hostFrame = read(hostSocket)
-    expect(await muxFrame).toEqual({
+describe('WebSocketDownlinks', () => {
+  it('sends mux and host frames as server-request envelopes on their own sockets', async () => {
+    const mux = observed<MuxFrame>({
+      rpcId: RpcId('mux-1'),
+      payload: { type: 'session/subscribed', sessionId: 'session-1' as never, lastSeq: 4 },
+    })
+    const host = observed<HostFrame>({
+      rpcId: RpcId('host-1'),
+      payload: { type: 'host/remote-event', event: 'commands/change', args: [] },
+    })
+    const downlinks = new WebSocketDownlinks(api(mux.source, host.source))
+    const muxSocket = new FakeSocket()
+    const hostSocket = new FakeSocket()
+    const muxPump = downlinks.openMux(muxSocket)
+    const hostPump = downlinks.openHost(hostSocket)
+    await vi.waitFor(() => {
+      expect(muxSocket.frames).toHaveLength(1)
+      expect(hostSocket.frames).toHaveLength(1)
+    })
+    expect(muxSocket.frames[0]).toEqual({
       type: 'server-request',
       rpcId: 'mux-1',
       method: 'session/subscribed',
       payload: { type: 'session/subscribed', sessionId: 'session-1', lastSeq: 4 },
     })
-    expect(await hostFrame).toEqual({
+    expect(hostSocket.frames[0]).toEqual({
       type: 'server-request',
       rpcId: 'host-1',
       method: 'host/remote-event',
       payload: { type: 'host/remote-event', event: 'commands/change', args: [] },
     })
+    expect(mux.state.signal?.aborted).toBe(false)
+    expect(host.state.signal?.aborted).toBe(false)
 
-    const muxClosed = once(mux, 'close')
-    const hostClosed = once(hostSocket, 'close')
-    mux.close()
+    // Each client departure cancels only its own source.
+    muxSocket.close()
+    await muxPump
+    expect(mux.state.signal?.aborted).toBe(true)
+    expect(mux.state.finished).toBe(true)
+    expect(host.state.signal?.aborted).toBe(false)
     hostSocket.close()
-    await Promise.all([muxClosed, hostClosed])
-    await vi.waitFor(() => {
-      expect(muxAborted).toBe(true)
-      expect(hostAborted).toBe(true)
-    })
+    await hostPump
+    expect(host.state.signal?.aborted).toBe(true)
+    // The pump never re-closes a socket the client already closed.
+    expect(muxSocket.closes).toEqual([{ code: undefined, reason: undefined }])
+    expect(hostSocket.closes).toEqual([{ code: undefined, reason: undefined }])
   })
 
-  it('rejects client messages because upstream remains HTTP', async () => {
-    let aborted = false
-    const downlinks = new WebSocketDownlinks(api(
-      async function * (signal) {
-        try {
-          await untilAbort(signal)
-        } finally {
-          aborted = true
-        }
-      },
-      idle,
-    ))
-    const host = await serve(downlinks)
-    running.push(host.close)
-    const socket = new WebSocket(`${host.origin}${MUX_EVENTS_PATH}`)
-    await once(socket, 'open')
-    const closed = once(socket, 'close')
-    socket.send('upstream payload')
-    const [code, reason] = await closed as [number, Buffer]
-    expect(code).toBe(1008)
-    expect(String(reason)).toBe('downlink only')
-    await vi.waitFor(() => { expect(aborted).toBe(true) })
+  it('closes 1008 on a client message because upstream stays on HTTP, aborting the source', async () => {
+    const mux = observed<MuxFrame>()
+    const downlinks = new WebSocketDownlinks(api(mux.source, idle))
+    const socket = new FakeSocket()
+    const pump = downlinks.openMux(socket)
+    await vi.waitFor(() => { expect(mux.state.signal).toBeDefined() })
+    socket.dispatch('message', { data: 'upstream payload' })
+    await pump
+    expect(socket.closes).toEqual([{ code: 1008, reason: 'downlink only' }])
+    expect(mux.state.signal?.aborted).toBe(true)
+    expect(mux.state.finished).toBe(true)
   })
 
-  it('sends stream/error before closing when a source fails', async () => {
+  it('aborts the source when the socket reports a transport error', async () => {
+    const mux = observed<MuxFrame>()
+    const downlinks = new WebSocketDownlinks(api(mux.source, idle))
+    const socket = new FakeSocket()
+    const pump = downlinks.openMux(socket)
+    await vi.waitFor(() => { expect(mux.state.signal).toBeDefined() })
+    socket.dispatch('error', { data: new Error('transport failed') })
+    await pump
+    expect(mux.state.signal?.aborted).toBe(true)
+    // The socket was still open from the pump's view, so it closes it itself.
+    expect(socket.closes).toEqual([{ code: undefined, reason: undefined }])
+  })
+
+  it('sends one stream/error frame then closes when the source throws', async () => {
     const downlinks = new WebSocketDownlinks(api(
       async function * () {
         throw new Error('mux source failed')
       },
       idle,
     ))
-    const host = await serve(downlinks)
-    running.push(host.close)
-    const socket = new WebSocket(`${host.origin}${MUX_EVENTS_PATH}`)
-    const failure = read(socket)
-    const closed = once(socket, 'close')
-    expect((await failure).payload).toEqual({
-      type: 'stream/error',
-      error: { code: 'internal', message: 'Error: mux source failed', details: {} },
-    })
-    await closed
-  })
-
-  it('aborts the source when an accepted socket reports a transport error', async () => {
-    let aborted = false
-    const downlinks = new WebSocketDownlinks(api(
-      async function * (signal) {
-        try {
-          await untilAbort(signal)
-        } finally {
-          aborted = true
-        }
+    const socket = new FakeSocket()
+    await downlinks.openMux(socket)
+    expect(socket.frames).toHaveLength(1)
+    expect(socket.frames[0]).toMatchObject({
+      type: 'server-request',
+      method: 'stream/error',
+      payload: {
+        type: 'stream/error',
+        error: { code: 'internal', message: 'Error: mux source failed', details: {} },
       },
-      idle,
-    ))
-    const host = await serve(downlinks)
-    running.push(host.close)
-    const socket = new WebSocket(`${host.origin}${MUX_EVENTS_PATH}`)
-    await once(socket, 'open')
-    const accepted = await acceptedSocket(downlinks)
-    const closed = once(socket, 'close')
-    accepted.emit('error', new Error('transport failed'))
-    await closed
-    expect(aborted).toBe(true)
+    })
+    expect(socket.closes).toEqual([{ code: undefined, reason: undefined }])
+    expect(socket.readyState).toBe(WEBSOCKET_CLOSED)
   })
 
-  it('drops a source frame that races after the client has closed', async () => {
+  it('drops a frame that races after the client closed and swallows the send failure', async () => {
     let release!: () => void
     const gate = new Promise<void>((resolve) => { release = resolve })
-    let finish!: () => void
-    const finished = new Promise<void>((resolve) => { finish = resolve })
     let sourceSignal: AbortSignal | undefined
     const downlinks = new WebSocketDownlinks(api(
       async function * (signal) {
         sourceSignal = signal
-        try {
-          await gate
-          yield {
-            rpcId: RpcId('late'),
-            payload: { type: 'session/subscribed', sessionId: 'session-late' as never, lastSeq: 0 },
-          }
-        } finally {
-          finish()
+        await gate
+        yield {
+          rpcId: RpcId('late'),
+          payload: { type: 'session/subscribed', sessionId: 'session-late' as never, lastSeq: 0 },
         }
       },
       idle,
     ))
-    const host = await serve(downlinks)
-    running.push(host.close)
-    const socket = new WebSocket(`${host.origin}${MUX_EVENTS_PATH}`)
-    await once(socket, 'open')
-    const closed = once(socket, 'close')
+    const socket = new FakeSocket()
+    const pump = downlinks.openMux(socket)
+    await vi.waitFor(() => { expect(sourceSignal).toBeDefined() })
     socket.close()
-    await closed
-    await vi.waitFor(() => { expect(sourceSignal?.aborted).toBe(true) })
+    expect(sourceSignal?.aborted).toBe(true)
     release()
-    await finished
+    await pump
+    // The late frame fails the closed-socket check; the pump neither
+    // reports it (the client is gone) nor closes the socket twice.
+    expect(socket.frames).toHaveLength(0)
+    expect(socket.closes).toEqual([{ code: undefined, reason: undefined }])
   })
 
-  it('contains socket send callback failures and closes the downlink', async () => {
+  it('swallows a failure frame that loses the race to socket loss', async () => {
     let release!: () => void
     const gate = new Promise<void>((resolve) => { release = resolve })
     const downlinks = new WebSocketDownlinks(api(
       async function * () {
         await gate
-        yield {
-          rpcId: RpcId('send-failure'),
-          payload: { type: 'session/subscribed', sessionId: 'session-send' as never, lastSeq: 0 },
-        }
+        throw new Error('failed after the socket went away')
       },
       idle,
     ))
-    const host = await serve(downlinks)
-    running.push(host.close)
-    const socket = new WebSocket(`${host.origin}${MUX_EVENTS_PATH}`)
-    await once(socket, 'open')
-    const accepted = await acceptedSocket(downlinks)
-    const send = vi.spyOn(accepted, 'send').mockImplementation(((
-      _data: unknown,
-      optionsOrCallback?: unknown,
-      callback?: (error?: Error) => void,
-    ) => {
-      const done = typeof optionsOrCallback === 'function'
-        ? optionsOrCallback as (error?: Error) => void
-        : callback
-      done?.(new Error('socket send failed'))
-    }) as WebSocket['send'])
-    const closed = once(socket, 'close')
+    const socket = new FakeSocket()
+    const pump = downlinks.openMux(socket)
+    // The transport dies without the pump's signal aborting (readyState flips,
+    // no close event reaches the listener), so the failure path still tries
+    // to send and meets the closed-socket check.
+    socket.readyState = WEBSOCKET_CLOSED
     release()
-    await closed
-    expect(send).toHaveBeenCalledTimes(2)
-    send.mockRestore()
+    await pump
+    expect(socket.frames).toHaveLength(0)
+    expect(socket.closes).toHaveLength(0)
   })
 
-  it('rejects when its acceptor has already closed', async () => {
-    const downlinks = new WebSocketDownlinks(api(idle, idle))
-    await downlinks.close()
-    await expect(downlinks.close()).rejects.toThrow('The server is not running')
-  })
-
-  it('waits for source cleanup before teardown resolves', async () => {
+  it('close() closes every owned socket with 1001 and awaits the pumps', async () => {
     let cleanupStarted!: () => void
     const started = new Promise<void>((resolve) => { cleanupStarted = resolve })
     let releaseCleanup!: () => void
     const cleanupGate = new Promise<void>((resolve) => { releaseCleanup = resolve })
     let cleaned = false
+    const host = observed<HostFrame>()
     const downlinks = new WebSocketDownlinks(api(
       async function * (signal) {
         try {
@@ -287,22 +247,35 @@ describe('WebSocket downlinks', () => {
           cleaned = true
         }
       },
-      idle,
+      host.source,
     ))
-    const host = await serve(downlinks)
-    const socket = new WebSocket(`${host.origin}${MUX_EVENTS_PATH}`)
-    await once(socket, 'open')
+    const muxSocket = new FakeSocket()
+    const hostSocket = new FakeSocket()
+    void downlinks.openMux(muxSocket)
+    void downlinks.openHost(hostSocket)
+    await vi.waitFor(() => { expect(host.state.signal).toBeDefined() })
     let closed = false
-    const closing = host.close().then(() => { closed = true })
-    try {
-      await started
-      expect(closed).toBe(false)
-      releaseCleanup()
-      await closing
-      expect(cleaned).toBe(true)
-    } finally {
-      releaseCleanup()
-      await closing
-    }
+    const closing = downlinks.close().then(() => { closed = true })
+    await started
+    expect(muxSocket.closes).toEqual([{ code: 1001, reason: 'server shutting down' }])
+    expect(hostSocket.closes).toEqual([{ code: 1001, reason: 'server shutting down' }])
+    expect(closed).toBe(false)
+    releaseCleanup()
+    await closing
+    expect(cleaned).toBe(true)
+    expect(host.state.finished).toBe(true)
+  })
+
+  it('releases a socket from the owned set once its pump ends', async () => {
+    const mux = observed<MuxFrame>()
+    const downlinks = new WebSocketDownlinks(api(mux.source, idle))
+    const socket = new FakeSocket()
+    const pump = downlinks.openMux(socket)
+    await vi.waitFor(() => { expect(mux.state.signal).toBeDefined() })
+    socket.close()
+    await pump
+    // A later shutdown touches nothing: the ended pump's socket is gone.
+    await downlinks.close()
+    expect(socket.closes).toEqual([{ code: undefined, reason: undefined }])
   })
 })

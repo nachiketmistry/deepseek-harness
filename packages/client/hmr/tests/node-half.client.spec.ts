@@ -1,6 +1,7 @@
 /**
  * Node half of the HMR plugin: bundle watches follow the graph, stat changes
- * report through clientModuleHost.rebuilt, and everything dies with the fiber.
+ * report through clientModuleHost.rebuilt, the `/plugins/events` SSE channel
+ * streams graph and rebuilt frames, and everything dies with the fiber.
  */
 import { mkdtempSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -8,7 +9,7 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WebBootGraph, ClientModuleRegistry } from '@deepseek-ai/dsh-client-modules'
-import type { WebRoute, WebServer } from '@deepseek-ai/dsh-host-webserver'
+import { WebServer, type WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import { apply, Config, EVENTS_ENDPOINT, inject } from '../src/index.ts'
 
 const POLL_MS = 20
@@ -23,7 +24,11 @@ afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
  * Structural (Pick+cast): the plugin only touches the read/notify surface;
  * the service class carries private scan state a literal need not reproduce.
  */
-type FakeHost = ClientModuleRegistry & { rebuiltCalls: string[]; fireGraphChanged(): void }
+type FakeHost = ClientModuleRegistry & {
+  rebuiltCalls: string[]
+  fireGraphChanged(): void
+  fireRebuilt(id: string, rev: string): void
+}
 interface FakeHostOptions {
   beforeGraphRead?: () => void
   rebuilt?: (id: string) => string | undefined
@@ -31,10 +36,12 @@ interface FakeHostOptions {
 
 function fakeClientModuleHost(rows: Map<string, string>, options: FakeHostOptions = {}): FakeHost {
   const graphListeners = new Set<() => void>()
+  const rebuiltListeners = new Set<(id: string, rev: string) => void>()
   const rebuiltCalls: string[] = []
-  const fake: Pick<FakeHost, 'graph' | 'clientPath' | 'rebuilt' | 'onRebuilt' | 'onGraphChanged' | 'rebuiltCalls' | 'fireGraphChanged'> = {
+  const fake: Pick<FakeHost, 'graph' | 'clientPath' | 'rebuilt' | 'onRebuilt' | 'onGraphChanged' | 'rebuiltCalls' | 'fireGraphChanged' | 'fireRebuilt'> = {
     rebuiltCalls,
     fireGraphChanged: () => { for (const l of graphListeners) l() },
+    fireRebuilt: (id, rev) => { for (const l of rebuiltListeners) l(id, rev) },
     graph: (): WebBootGraph => {
       options.beforeGraphRead?.()
       return {
@@ -47,7 +54,10 @@ function fakeClientModuleHost(rows: Map<string, string>, options: FakeHostOption
       rebuiltCalls.push(id)
       return options.rebuilt?.(id) ?? 'r2'
     },
-    onRebuilt: () => () => {},
+    onRebuilt: (listener) => {
+      rebuiltListeners.add(listener)
+      return () => { rebuiltListeners.delete(listener) }
+    },
     onGraphChanged: (listener) => {
       graphListeners.add(listener)
       return () => { graphListeners.delete(listener) }
@@ -56,18 +66,37 @@ function fakeClientModuleHost(rows: Map<string, string>, options: FakeHostOption
   return fake as FakeHost
 }
 
-// Structural fake: the plugin only touches register(); the service class
-// carries private state a literal cannot (and need not) reproduce.
+/** Carrier fake: the abstract Service Definition with no listener; `routes` mirrors its exact table. */
 function fakeHttpServer(routes: WebRoute[]): WebServer {
-  const fake: Pick<WebServer, 'register' | 'tapIndex' | 'port'> = {
-    register(route) {
+  class TestWebServer extends WebServer {
+    get address(): undefined { return undefined }
+    override register(route: WebRoute): () => void {
       routes.push(route)
-      return () => { routes.splice(routes.indexOf(route), 1) }
-    },
-    tapIndex: () => () => {},
-    port: 0,
+      const dispose = super.register(route)
+      return () => {
+        dispose()
+        routes.splice(routes.indexOf(route), 1)
+      }
+    }
   }
-  return fake as WebServer
+  return new TestWebServer(new Context())
+}
+
+/** Open the SSE channel and return a UTF-8 line reader over its body. */
+async function openEvents(webServer: WebServer, signal?: AbortSignal): Promise<{
+  response: Response
+  read(): Promise<{ done: boolean; text: string }>
+}> {
+  const response = await webServer.fetch(new Request(`http://127.0.0.1${EVENTS_ENDPOINT}`, signal === undefined ? {} : { signal }))
+  const reader = response.body!.getReader()
+  const decoder = new TextDecoder()
+  return {
+    response,
+    read: async () => {
+      const { done, value } = await reader.read()
+      return { done, text: done ? '' : decoder.decode(value) }
+    },
+  }
 }
 
 async function mount(clientModuleHost: FakeHost, webServer: WebServer) {
@@ -200,5 +229,128 @@ describe('hmr node half', () => {
 
     await vi.waitFor(() => { expect(clientModuleHost.rebuiltCalls).toEqual(['pkg-a', 'pkg-a']) }, { timeout: 3_000 })
     await fiber.dispose()
+  })
+
+  it('warns on non-ENOENT stat and rehash failures and skips rows without a bundle path', async () => {
+    const file = join(dir, 'file.js')
+    writeFileSync(file, 'v1')
+    const notDir = join(file, 'child.js')
+    const missing = join(dir, 'missing.js')
+    const rows = new Map([['pkg-notdir', notDir], ['pkg-missing', missing], ['pkg-file', file]])
+    const clientModuleHost = fakeClientModuleHost(rows, {
+      rebuilt: (id) => {
+        if (id === 'pkg-file') throw new Error('hash failed')
+        return 'r2'
+      },
+    })
+    rows.set('pkg-pathless', undefined as unknown as string)
+    const ctx = new Context()
+    const warn = vi.spyOn(ctx.logger, 'warn').mockImplementation(() => undefined)
+    ctx.provide('clientModules', clientModuleHost)
+    ctx.provide('webServer', fakeHttpServer([]))
+    const fiber = ctx.plugin({ inject: [...inject], Config, apply }, { pollIntervalMs: POLL_MS })
+    await fiber.await()
+
+    // ENOTDIR baseline and a non-ENOENT rehash failure warn once each; the missing bundle stays silent.
+    expect(clientModuleHost.rebuiltCalls).toEqual(['pkg-file'])
+    expect(warn).toHaveBeenCalledTimes(2)
+    expect(String(warn.mock.calls[0]?.[0])).toContain('ENOTDIR')
+    expect(String(warn.mock.calls[1]?.[0])).toContain('hash failed')
+    // The poll repeats the ENOTDIR warning for the watched-but-unstatable row.
+    await vi.waitFor(() => { expect(warn.mock.calls.length).toBeGreaterThan(2) }, { timeout: 3_000 })
+    await fiber.dispose()
+  })
+
+  describe('/plugins/events channel', () => {
+    it('answers 405 to a non-GET request', async () => {
+      const webServer = fakeHttpServer([])
+      const fiber = await mount(fakeClientModuleHost(new Map()), webServer)
+      const response = await webServer.fetch(new Request(`http://127.0.0.1${EVENTS_ENDPOINT}`, { method: 'POST' }))
+      expect(response.status).toBe(405)
+      await fiber.dispose()
+    })
+
+    it('opens with the connected comment and the current graph frame', async () => {
+      const bundle = join(dir, 'a.js')
+      writeFileSync(bundle, 'v1')
+      const clientModuleHost = fakeClientModuleHost(new Map([['pkg-a', bundle]]))
+      const webServer = fakeHttpServer([])
+      const fiber = await mount(clientModuleHost, webServer)
+
+      const events = await openEvents(webServer)
+      expect(events.response.status).toBe(200)
+      expect(events.response.headers.get('content-type')).toBe('text/event-stream')
+      expect(events.response.headers.get('cache-control')).toBe('no-cache')
+      expect(await events.read()).toEqual({ done: false, text: ': connected\n\n' })
+      expect(await events.read()).toEqual({
+        done: false,
+        text: `data: ${JSON.stringify({ type: 'graph', graph: clientModuleHost.graph() })}\n\n`,
+      })
+      await fiber.dispose()
+    })
+
+    it('broadcasts a rebuilt frame to every open stream', async () => {
+      const clientModuleHost = fakeClientModuleHost(new Map())
+      const webServer = fakeHttpServer([])
+      const fiber = await mount(clientModuleHost, webServer)
+      const first = await openEvents(webServer)
+      const second = await openEvents(webServer)
+      for (const events of [first, second]) {
+        await events.read()
+        await events.read()
+      }
+
+      clientModuleHost.fireRebuilt('pkg-a', 'r2')
+
+      const frame = `data: ${JSON.stringify({ type: 'rebuilt', id: 'pkg-a', rev: 'r2' })}\n\n`
+      expect(await first.read()).toEqual({ done: false, text: frame })
+      expect(await second.read()).toEqual({ done: false, text: frame })
+      await fiber.dispose()
+    })
+
+    it('releases the row when the request aborts: the stream ends and later rebuilds skip it', async () => {
+      const clientModuleHost = fakeClientModuleHost(new Map())
+      const webServer = fakeHttpServer([])
+      const fiber = await mount(clientModuleHost, webServer)
+      const abort = new AbortController()
+      const gone = await openEvents(webServer, abort.signal)
+      const open = await openEvents(webServer)
+      for (const events of [gone, open]) {
+        await events.read()
+        await events.read()
+      }
+
+      abort.abort()
+      expect(await gone.read()).toEqual({ done: true, text: '' })
+      expect(() => { clientModuleHost.fireRebuilt('pkg-a', 'r2') }).not.toThrow()
+      expect((await open.read()).text).toContain('"type":"rebuilt"')
+      await fiber.dispose()
+    })
+
+    it('releases the row when the carrier cancels the body', async () => {
+      const clientModuleHost = fakeClientModuleHost(new Map())
+      const webServer = fakeHttpServer([])
+      const fiber = await mount(clientModuleHost, webServer)
+      const response = await webServer.fetch(new Request(`http://127.0.0.1${EVENTS_ENDPOINT}`))
+
+      await response.body!.cancel()
+      expect(() => { clientModuleHost.fireRebuilt('pkg-a', 'r2') }).not.toThrow()
+      await fiber.dispose()
+    })
+
+    it('closes every open stream on disposal, and a later abort of a closed stream stays silent', async () => {
+      const clientModuleHost = fakeClientModuleHost(new Map())
+      const webServer = fakeHttpServer([])
+      const fiber = await mount(clientModuleHost, webServer)
+      const abort = new AbortController()
+      const events = await openEvents(webServer, abort.signal)
+      await events.read()
+      await events.read()
+
+      await fiber.dispose()
+      expect(await events.read()).toEqual({ done: true, text: '' })
+      expect(() => { abort.abort() }).not.toThrow()
+      expect((await webServer.fetch(new Request(`http://127.0.0.1${EVENTS_ENDPOINT}`))).status).toBe(404)
+    })
   })
 })

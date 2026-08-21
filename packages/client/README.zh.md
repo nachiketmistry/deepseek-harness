@@ -9,6 +9,7 @@ dsh web GUI 的浏览器侧：shell 启动、浏览器与宿主通信、共享 U
 | [`web/`](web/README.zh.md) | 从客户端条目图启动浏览器 shell。 |
 | [`ui-renderer/`](ui-renderer/README.zh.md) | 将 slot 数据绑定到 React，并在客户端启动稳定后挂载组装完成的应用。 |
 | [`modules/`](modules/README.zh.md) | 加载浏览器侧客户端模块。 |
+| [`bundle-source-node/`](bundle-source-node/README.zh.md) | 为模块系统的 node 侧经 `node_modules` 解析客户端 bundle。 |
 | [`connection/`](connection/README.zh.md) | 维护浏览器与宿主之间的 RPC 通信和事件传递。 |
 | [`runtime/`](runtime/README.zh.md) | 为会话、工作区和 UI 组合提供共享客户端服务。 |
 | [`hmr/`](hmr/README.zh.md) | 在开发期间刷新客户端插件。 |

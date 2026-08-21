@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
-import WebServer from '@deepseek-ai/dsh-host-webserver'
+import NodeWebServer from '@deepseek-ai/dsh-host-webserver-node'
 import { apply, internals } from '../src/index.ts'
 
 const contexts: Context[] = []
@@ -69,10 +69,10 @@ describe('web app browser startup', () => {
 
     const globals = globalThis as unknown as {
       __dshWebAppApply: typeof apply
-      __dshWebServer: typeof WebServer
+      __dshWebServer: typeof NodeWebServer
     }
     globals.__dshWebAppApply = apply
-    globals.__dshWebServer = WebServer
+    globals.__dshWebServer = NodeWebServer
 
     let openedUrl: string | undefined
     let openedStatus: number | undefined
@@ -95,7 +95,7 @@ describe('web app browser startup', () => {
     await ctx.loader.await()
     await opened
 
-    expect(openedUrl).toBe(`http://127.0.0.1:${String(ctx.webServer.port)}`)
+    expect(openedUrl).toBe(`http://127.0.0.1:${String(ctx.webServer.address?.port)}`)
     expect(openedStatus).toBe(200)
   })
 })

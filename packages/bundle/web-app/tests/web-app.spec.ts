@@ -72,8 +72,7 @@ function stageDist(): string {
 function fakeHttpServer(host: '127.0.0.1' | '0.0.0.0' = '127.0.0.1'): { server: WebServer; seat: () => unknown } {
   let fallback: unknown
   const server = {
-    host,
-    port: 4567,
+    address: { host, port: 4567 },
     registerFallback: (handler: unknown) => {
       fallback = handler
       return () => { fallback = undefined }
@@ -277,13 +276,23 @@ describe('web-app runtime glue', () => {
     // A webserver whose bound port is gone (torn down mid-request): the
     // section must throw, never render a URL with an undefined port.
     const { server } = fakeHttpServer()
-    Object.defineProperty(server, 'port', { get: () => undefined })
     ctx.provide('webServer', server)
     apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: true, trustedHosts: [] }))
+    Object.defineProperty(server, 'address', { get: () => undefined })
     await ctx.plugin(SystemPrompt, { persona: '' })
     await new Promise(resolve => setTimeout(resolve, 0))
     await expect(ctx.systemPrompt.assemble()).rejects.toThrow('webServer service missing')
     await ctx.fiber.dispose()
+  })
+
+  it('refuses to mount over a carrier that owns no listener', () => {
+    stageDist()
+    const ctx = new Context()
+    const { server } = fakeHttpServer()
+    Object.defineProperty(server, 'address', { get: () => undefined })
+    ctx.provide('webServer', server)
+    expect(() => { apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: false, trustedHosts: [] })) })
+      .toThrow('web-app: the webServer provider owns no listener; this bundle needs the Node carrier')
   })
 
   it('resolves the real built frontend dist through the package exports, failing loud unbuilt', () => {

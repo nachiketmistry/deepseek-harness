@@ -13,11 +13,9 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
-import Include from '@deepseek-ai/cordis-plugin-include'
 import { beforeEach, describe, expect, it } from 'vitest'
-import AgentPresets, {
-  COMPOSITION_FILE, copyComposition, METADATA_FILE,
-} from '@deepseek-ai/dsh-agent-presets'
+import AgentPresets from '@deepseek-ai/dsh-agent-presets'
+import FilesystemAgentPresetSource, { COMPOSITION_FILE, copyComposition, METADATA_FILE } from '@deepseek-ai/dsh-agent-presets-filesystem'
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
 const VALID = '- id: tool-alpha\n  name: ../../plugins/contribute.js\n  config:\n    tool: alpha\n'
@@ -45,9 +43,7 @@ beforeEach(async () => {
   ctx = new Context()
   ctx.baseUrl = pathToFileURL(FIXTURES).href + '/'
   await ctx.plugin(Loader)
-  ctx.loader.builtins.include = Include
-  await ctx.plugin(AgentPresets, {
-    default: 'standard',
+  await ctx.plugin(FilesystemAgentPresetSource, {
     roots: [
       { path: join(FIXTURES, 'system'), trust: 'system' as const },
       { path: userRoot, trust: 'user' as const },
@@ -57,6 +53,7 @@ beforeEach(async () => {
     // count, and `copy` would write into it.
     includeUserRoot: false,
   })
+  await ctx.plugin(AgentPresets, { default: 'standard' })
 })
 
 describe('copying a preset', () => {
@@ -196,15 +193,14 @@ describe('a deployment with more than one user root', () => {
     const layered = new Context()
     layered.baseUrl = pathToFileURL(FIXTURES).href + '/'
     await layered.plugin(Loader)
-    layered.loader.builtins.include = Include
-    await layered.plugin(AgentPresets, {
-      default: 'standard',
+    await layered.plugin(FilesystemAgentPresetSource, {
       roots: [
         { path: userRoot, trust: 'user' as const },
         { path: second, trust: 'user' as const },
       ],
       includeUserRoot: false,
     })
+    await layered.plugin(AgentPresets, { default: 'standard' })
 
     // Writes go to the first user root, so a preset discovered from a later
     // one is `user` trust yet outside what deletion is allowed to touch —
@@ -220,12 +216,11 @@ describe('a deployment with no writable root', () => {
     const readOnly = new Context()
     readOnly.baseUrl = pathToFileURL(FIXTURES).href + '/'
     await readOnly.plugin(Loader)
-    readOnly.loader.builtins.include = Include
-    await readOnly.plugin(AgentPresets, {
-      default: 'standard',
+    await readOnly.plugin(FilesystemAgentPresetSource, {
       roots: [{ path: join(FIXTURES, 'system'), trust: 'system' as const }],
       includeUserRoot: false,
     })
+    await readOnly.plugin(AgentPresets, { default: 'standard' })
 
     expect(readOnly.agentPresets.authorable).toBe(false)
     await expect(readOnly.agentPresets.copy('standard', 'mine'))
@@ -239,15 +234,14 @@ describe('a user root that does not exist yet', () => {
     const fresh = new Context()
     fresh.baseUrl = pathToFileURL(FIXTURES).href + '/'
     await fresh.plugin(Loader)
-    fresh.loader.builtins.include = Include
-    await fresh.plugin(AgentPresets, {
-      default: 'standard',
+    await fresh.plugin(FilesystemAgentPresetSource, {
       roots: [
         { path: join(FIXTURES, 'system'), trust: 'system' as const },
         { path: absent, trust: 'user' as const },
       ],
       includeUserRoot: false,
     })
+    await fresh.plugin(AgentPresets, { default: 'standard' })
 
     await fresh.agentPresets.copy('standard', 'mine')
 

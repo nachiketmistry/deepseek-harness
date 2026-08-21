@@ -11,7 +11,7 @@
  * path refuses the name while no surface shows anything to delete — and a
  * malformed composition would otherwise read as an ordinary preset until the
  * first session fails to mount it.
- * @module @deepseek-ai/dsh-agent-presets/discovery
+ * @module @deepseek-ai/dsh-agent-presets-filesystem/discovery
  */
 
 import { readdir, readFile, stat } from 'node:fs/promises'
@@ -20,7 +20,8 @@ import { load } from 'js-yaml'
 import { entryListSchema } from '@deepseek-ai/cordis-plugin-include'
 import { expandHomePath } from '@deepseek-ai/dsh-home-paths'
 import { readPresetMetadata } from './metadata.ts'
-import { PRESET_ID, type AgentPreset, type PresetRoot } from './preset.ts'
+import { PRESET_ID, type AgentPreset } from '@deepseek-ai/dsh-agent-presets'
+import type { PresetRoot } from './root.ts'
 
 /** The composition file that makes a directory a preset. */
 export const COMPOSITION_FILE = 'agent.cordis.yml'

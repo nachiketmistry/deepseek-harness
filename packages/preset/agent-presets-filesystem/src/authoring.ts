@@ -9,7 +9,7 @@
  * No caller supplies composition text: the inputs are ids the host resolves
  * against its own roots plus an optional display name, so authoring grants no
  * capability the copied preset did not already carry.
- * @module @deepseek-ai/dsh-agent-presets/authoring
+ * @module @deepseek-ai/dsh-agent-presets-filesystem/authoring
  */
 
 import { chmod, cp, readdir, readFile, rm, stat } from 'node:fs/promises'
@@ -17,44 +17,10 @@ import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { expandHomePath } from '@deepseek-ai/dsh-home-paths'
 import { METADATA_FILE, renderPresetMetadata } from './metadata.ts'
-import { PRESET_ID, type AgentPreset, type PresetRoot } from './preset.ts'
-
-/** A preset id that cannot be used as a directory name under a root. */
-export class InvalidPresetIdError extends Error {
-  constructor(
-    /** The rejected id. */
-    readonly presetId: string,
-  ) {
-    super(
-      `agent-presets: preset id ${JSON.stringify(presetId)} must match ${String(PRESET_ID)} — `
-      + 'the id is a directory name, so anything else could escape the preset root',
-    )
-  }
-}
-
-/** A copy target that is already occupied — a copy never overwrites. */
-export class PresetExistsError extends Error {
-  constructor(
-    /** The id that is already taken. */
-    readonly presetId: string,
-  ) {
-    super(
-      `agent-presets: preset "${presetId}" already exists — `
-      + 'a copy never overwrites; delete the existing preset first or choose another id',
-    )
-  }
-}
-
-/** Authoring was attempted where the deployment allows none. */
-export class PresetNotWritableError extends Error {
-  constructor(
-    /** What the caller tried to change, for the diagnostic. */
-    readonly presetId: string,
-    reason: string,
-  ) {
-    super(`agent-presets: preset "${presetId}" cannot be written: ${reason}`)
-  }
-}
+import {
+  InvalidPresetIdError, PRESET_ID, PresetExistsError, PresetNotWritableError, type AgentPreset,
+} from '@deepseek-ai/dsh-agent-presets'
+import type { PresetRoot } from './root.ts'
 
 /**
  * The root locally authored presets are written to.

@@ -2,33 +2,47 @@
 
 English | [中文](README.zh.md)
 
-Per-preset agent composition. A **preset** is a directory holding one `agent.cordis.yml`; the roster mounts it ONCE per process under a standing scope, and each session that names it joins by having its agent scope key parented to the mount's (`dsh-scope`'s parent chain). The mount's tools, prompt sections, and projection units exist exactly once and cover every joined agent — its plugins key their state by Session/Agent, so sessions stay apart inside one shared instance — and a host reader with no agent at all (a cold transcript read) resolves the same standing registrations by preset id.
+Per-preset agent composition. A **preset** is one list of plugin rows (an `agent.cordis.yml` on disk, or an entry in a bundled table); the roster mounts it ONCE per process under a standing scope, and each session that names it joins by having its agent scope key parented to the mount's (`dsh-scope`'s parent chain). The mount's tools, prompt sections, and projection units exist exactly once and cover every joined agent — its plugins key their state by Session/Agent, so sessions stay apart inside one shared instance — and a host reader with no agent at all (a cold transcript read) resolves the same standing registrations by preset id.
+
+This package is the **Service Definition and Consumer** half of the agent-preset source seam: it owns the preset vocabulary, the `AgentPresetSource` contract, and the guarded standing mount over rows the source hands it. Where presets come from is the composed **Service Provider**'s business — [`dsh-agent-presets-filesystem`](../agent-presets-filesystem/README.md) discovers preset directories under configured roots and is what every shipped composition mounts; a host without a disk supplies presets from a bundled table instead. The registry requires a source: it injects `agentPresetSource`, so a composition that mounts `agent-presets` mounts a source row before it.
 
 The mechanism is two seams. Entry contexts chain to the context a subtree was plugged into, and both [`dsh-tools`](../../core/tools/README.md) and [`dsh-system-prompt`](../../core/system-prompt/README.md) file registrations into the calling context's scope layer — so the standing mount's contributions land in the PRESET's layer. What carries them to each session is `dsh-scope`'s parent chain: an agent's views resolve `agent → preset → global` (nearest shadowing farthest), and the mount's listeners are admitted for every agent parented under it while a sibling preset's stay deaf.
 
-## Service: `AgentPresets` (ctx key: `agentPresets`)
+## Service Definition: `AgentPresetSource` (ctx key: `agentPresetSource`)
 
-Discovery is unmemoized: `list()` and `resolve()` re-read the roots on every call, so a preset authored while the process runs is visible immediately and a deleted one disappears from the next read. Discovery also owns preset **health**: a directory whose composition is missing or unloadable (unparsable YAML — checked with the loader's own dialect, `!!js` included — or not a list of named plugin rows) is listed with a `broken` reason rather than skipped, because a skipped directory would still occupy its id on disk while every surface shows nothing to delete. A directory whose name is not a usable preset id (`[a-z0-9][a-z0-9-]*`) is skipped outright: no copy could ever claim it.
+Where one deployment's presets come from and how they are authored. A provider extends the abstract class and implements:
+
+- `list(): Promise<AgentPreset[]>` Every preset the source supplies, in display order, broken ones included with their `broken` reason. Unmemoized by contract: each call reflects the source's current state.
+- `stamp(preset): Promise<string | undefined>` Opaque identity of the preset's current composition; a changed value starts a new standing generation for sessions created afterwards, and `undefined` (the composition cannot be read) serves the generation already mounted.
+- `composition(preset): Promise<PresetComposition>` The rows to mount — raw Loader entry options with `!!js` expression nodes preserved — the stamp they were read under, and the `baseUrl` relative row specifiers resolve against (absent when the source has no files). Rejects when the composition cannot be read or is not a list of rows; a first mount that hits that rejection fails with `PresetMountError`.
+- `read(preset): Promise<string>` The composition's source text, for the authoring read.
+- `authorable: boolean` Whether `copy`/`remove` can succeed for some preset.
+- `copy(source, id, name?)` / `remove(preset)` The two authoring writes; `copy` may throw `InvalidPresetIdError`, `PresetExistsError`, or `PresetNotWritableError`, all declared here so every consumer reports a source's refusal the same way.
+
+`AgentPreset.path` is the source-owned locator: the filesystem source stores the composition file's absolute path, and a host that opens preset documents uses its directory; another source may use a non-file locator, and the host then reports `opened: false` with it rather than treating it as a directory. `PRESET_ID` (`[a-z0-9][a-z0-9-]*`) is the id vocabulary every source shares, because a source may turn the id into a path segment.
+
+## Registry: `AgentPresets` (ctx key: `agentPresets`)
+
+The roster is unmemoized: `list()` and `resolve()` ask the source on every call, so a preset authored while the process runs is visible immediately and a deleted one disappears from the next read. The source owns preset **health**: a preset whose composition is missing or unloadable is listed with a `broken` reason rather than skipped, and every mounting path refuses it up front with that reason.
 
 - `ctx.agentPresets.defaultId: string` The preset id mounted when a caller names none.
-- `ctx.agentPresets.list(): Promise<AgentPreset[]>` Every preset the configured roots currently supply, earlier root winning a duplicate id; broken presets included, each carrying its reason.
-- `ctx.agentPresets.resolve(id?): Promise<AgentPreset>` One preset by id, defaulting to `defaultId`. Throws naming the available ids when no root supplies it. A broken preset resolves — deleting, reading, and reporting one all need the row.
-- `ctx.agentPresets.mount(agentCtx, id?): Promise<AgentPreset>` Compose one agent from a preset — ensure its standing mount (single-flight) and parent the agent's scope key to it — returning the preset for the caller to record. Refuses a broken preset up front with its discovery-reported reason, so every unloadable shape fails the same way before the loader is involved.
+- `ctx.agentPresets.list(): Promise<AgentPreset[]>` Every preset the source currently supplies; broken presets included, each carrying its reason.
+- `ctx.agentPresets.resolve(id?): Promise<AgentPreset>` One preset by id, defaulting to `defaultId`. Throws naming the available ids when the source supplies none under it. A broken preset resolves — deleting, reading, and reporting one all need the row.
+- `ctx.agentPresets.mount(agentCtx, id?): Promise<AgentPreset>` Compose one agent from a preset — ensure its standing mount (single-flight) and parent the agent's scope key to it — returning the preset for the caller to record. Refuses a broken preset up front with its source-reported reason, so every unloadable shape fails the same way before the loader is involved.
 - `ctx.agentPresets.composeFrom(agentCtx, parentCtx): string | undefined` Join one agent to the standing composition another already runs on, returning the preset id joined — `undefined` when the parent joined none, which is the rosterless deployment and not an error. A bind rather than a mount, so it is synchronous and has no composition failure mode; it still rejects a caller error (an unscoped context, or an agent that already joined).
 - `ctx.agentPresets.composedPreset(agentCtx): string | undefined` The preset one LIVE agent runs on, read from its scope chain rather than from its session — the only answer available for an agent whose durable header is still being built.
 - `ctx.agentPresets.recompose(agentCtx, id): Promise<AgentPreset>` Re-link one agent to a different preset's standing composition. Valid only while the agent has produced nothing — **the caller owns that check**; the new mount is ensured before the link moves, so a failure leaves the agent as it was. Refuses a broken preset like `mount()`.
 - `ctx.agentPresets.standingKeyFor(id?): Promise<ScopeKey>` The standing scope key a host reader with no agent (a cold transcript read) resolves preset registrations in; ensures the mount without starting an agent, session, or turn. Refuses a broken preset like `mount()`.
-- `ctx.agentPresets.roots: readonly PresetRoot[]` The roots this roster scans — every configured root in order, then the derived harness-home root. Not `config.roots`: read this to answer whether a roster is composed at all, so one derivation decides it.
-- `ctx.agentPresets.authorable: boolean` Whether any of those roots has `user` trust, and therefore whether a preset can be created at all.
+- `ctx.agentPresets.authorable: boolean` The source's answer to whether a preset can be created at all.
 - `ctx.agentPresets.read(id): Promise<string>` One preset's composition text, exactly as stored.
-- `ctx.agentPresets.copy(from, id, name?): Promise<void>` Create a locally authored preset by copying an existing one's whole directory — the only authoring write. No composition text crosses this seam, so a copy is exactly as loadable as its source; the copied metadata keeps the source's description but never its name or roster order, and `name` (or the id fallback) is what distinguishes the rows.
+- `ctx.agentPresets.copy(from, id, name?): Promise<void>` Create a locally authored preset by copying an existing one whole — the only authoring write. No composition text crosses this seam, so a copy is exactly as loadable as its source. The registry refuses an id the source already supplies (a user preset named like a shipped one would be shadowed by it) before the source's own occupancy check runs; the rest of the refusals and the copy itself are the source's.
 - `ctx.agentPresets.remove(id): Promise<void>` Delete a locally authored preset; joined sessions keep their standing mount. Clears the user default when it named the preset just deleted: storing a default that does not exist yet is deliberate, but one this call removed will never be supplied again and would fail every session created without an explicit pick.
 
-`AgentPreset` carries `id` (the directory name), `trust` (`system` or `user`, from the root it was found under), `path` (the absolute composition file), and — only when the preset cannot compose a session — `broken` (one human-readable reason, shown verbatim on roster surfaces).
+`AgentPreset` carries `id`, `trust` (`system` or `user`, from the location it was supplied from), `path` (the source-owned locator), optional display `name`/`description`/`order`, and — only when the preset cannot compose a session — `broken` (one human-readable reason, shown verbatim on roster surfaces).
 
 ### Where to call `mount()`
 
-The agent factory's `setup(agentCtx)` hook is the one supported call site. Only there is the join installed while the agent is still unpublished, so a rejected composition rolls the whole creation back rather than leaving a half-composed session. The standing subtree is owned by the roster service's own fiber — deliberately its UNTRACED context, because a subtree minted from a traced `this.ctx` resolves every service through the caller's shadow fiber instead of each entry's own inject store — so it survives every agent and unwinds only with the whole tree. Each generation records its composition file's stamp (mtime and size): a session that finds the stamp stale starts the next generation, while every session already joined keeps the one it runs on — the composition a running session joined outlives its file changing or disappearing underneath it, and files are the only composition editor, so the stamp is what carries an edit to later sessions.
+The agent factory's `setup(agentCtx)` hook is the one supported call site. Only there is the join installed while the agent is still unpublished, so a rejected composition rolls the whole creation back rather than leaving a half-composed session. The standing subtree is owned by the roster service's own fiber — deliberately its UNTRACED context, because a subtree minted from a traced `this.ctx` resolves every service through the caller's shadow fiber instead of each entry's own inject store — so it survives every agent and unwinds only with the whole tree. Each generation records the source stamp its rows were read under: a session that finds the stamp stale starts the next generation, while every session already joined keeps the one it runs on — the composition a running session joined outlives its source changing or disappearing underneath it, and editing the source is the only composition editor, so the stamp is what carries an edit to later sessions.
 
 ### Composing a child agent
 
@@ -52,54 +66,25 @@ The restriction to a produced-nothing agent is a product rule, not a mechanical 
 
 ## Authoring
 
-Authoring is copy-only. A new preset is a whole-directory copy of an existing one — composition, metadata, skill directories, assets — landed under the first `user` root; the inputs are two ids the service resolves against its own roots plus an optional display name, so no caller ever supplies composition text and a copy grants nothing the roster did not already carry. Everything after creation happens in the preset's own files. `copy()` refuses three things before anything lands:
+Authoring is copy-only. A new preset is a whole copy of an existing one; the inputs are two ids the registry resolves against its source plus an optional display name, so no caller ever supplies composition text and a copy grants nothing the roster did not already carry. The registry refuses an id the source already supplies — shipped ones included, since a user preset named like a shipped one would be shadowed by it — and hands everything else to the source: id containment (`PRESET_ID`), occupancy at the writable location, the copy itself, and what `remove()` may delete. The filesystem source's rules are on [its README](../agent-presets-filesystem/README.md#authoring).
 
-- **An id that is not `[a-z0-9][a-z0-9-]*`.** The id becomes a directory name, so containment is a property of the id itself rather than of a path check after the fact — `../escape`, `a/b`, and an absolute path are all rejected as ids.
-- **An id that is already taken.** A copy never overwrites: any root supplying the id refuses it (a user directory named like a shipped preset would be shadowed by it), and a directory occupying the name on disk refuses it too. Discovery lists such a directory as a broken preset, so the refusal's way out — delete it — is on the same page that reported it.
-- **An unknown source.** The source may be any trust — copying a shipped preset is the primary case — but it must exist; a failed copy rolls its half-made directory back rather than leaving one discovery cannot see.
+### How a preset's rows mount
 
-The copied tree is re-tightened to owner-only (`0o600` files keeping their owner-execute bit, `0o700` directories), symlinks are dereferenced so the copy is self-contained, and the root is created on first copy — a deployment configuring a user root that does not exist yet is the normal first-run state. The copied `preset.yml` is rewritten: the source's description is kept for the author to edit in place, but its name and roster `order` are dropped — a copy presenting itself identically to its source, or sorted into the shipped set's declared order, would make the roster stop distinguishing them. `remove()` refuses a preset that ships with the deployment; the shipped set is the known-good compositions copies start from.
+The source hands the registry parsed rows, and the mount plugs them as an in-memory Loader entry tree under the standing scope — the same tree for every source, with one file-specific fact carried along: the `baseUrl` relative specifiers resolve against. The rows are cloned per mount, because the Loader stores each row's options by identity and writes into them (`disabled`, generated ids); a source handing out one shared row set never sees one generation's state in the next.
 
-### How a preset's rows resolve
+A row's **package name** resolves from the host composition, not from the preset's base. The Loader normally resolves an entry against its own tree's `baseUrl`; a locally authored preset lives under the user's home, where Node's upward `node_modules` walk never reaches the harness, so every `@deepseek-ai/dsh-*` row would fail to import. The mount records the host base before plugging the subtree and sends bare specifiers there.
 
-A row's **package name** resolves from the host composition, not from the preset directory. The Loader normally resolves an entry against its own tree's `baseUrl`, which for a preset is wherever the composition file sits; a locally authored preset lives under the user's home, where Node's upward `node_modules` walk never reaches the harness, so every `@deepseek-ai/dsh-*` row would fail to import. The mount records the host base before plugging the subtree and sends bare specifiers there.
-
-A **relative** path still resolves from the preset's own directory, so a preset's own plugin files and skill directories travel with it.
+A **relative** path resolves from the composition's `baseUrl` — for a preset directory, the directory itself — so a preset's own plugin files and skill directories travel with it. A source with no files supplies no `baseUrl`, and a relative row cannot resolve there.
 
 An **absolute** filesystem path keeps its own location. The mount converts it to a `file:` URL before ESM import so POSIX paths and Windows drive-letter or UNC paths use a specifier Node accepts.
-
-### Display metadata
-
-A preset may publish display text in an optional `preset.yml` beside its composition:
-
-```yaml
-name: 极简模式
-description: 仅提供持久 bash 与 str_replace_editor 的双工具编码 Agent。
-```
-
-It carries display text ONLY. `id` is the directory name and `trust` comes from the root the preset was discovered under, so neither is writable here — otherwise a locally authored preset could name itself into the shipped set. It is a separate file because the composition is a top-level list of plugin rows: YAML cannot carry sibling keys beside it, and a fake metadata row would hand the Loader something to load.
-
-Every read failure degrades to no metadata — absent, malformed, wrongly typed, or blank all mean the same thing, and a picker falls back to the id. Presentation is not capability: a preset with a broken name still mounts.
 
 ## Config
 
 | Field | Default | Meaning |
 |---|---|---|
 | `default` | required | Preset id mounted when a caller names none |
-| `roots` | `[]` | Scanned directories in precedence order; each supplies `path` (a leading `~` expands) and `trust` (defaults to `user`) |
-| `includeUserRoot` | `true` | Append `<dshHome>/.agent-presets` as a `user` root, after every configured root |
 
-An absent root supplies no presets rather than failing: the user root does not exist until the first locally authored preset, and naming a default no root supplies already fails loud at resolution.
-
-### The writable root is this package's, the shipped root is the app's
-
-`<dshHome>/.agent-presets` is where a person's own presets live, the way `<dshHome>/skills` is where their own skills live ([`dsh-skill-filesystem`](../../skill/skill-filesystem/README.md)), so the roster derives it rather than waiting for a deployment to remember it — a launcher that configures nothing still finds and authors presets. It is appended AFTER every configured root, which keeps an earlier root winning a duplicate id: a shipped `standard` still shadows a home directory that claimed the name, and `copy()` refuses that id rather than landing a preset nothing would resolve.
-
-The roots are resolved once, when the service is constructed. A root set that changed between a `list()` and the `copy()` acting on its answer would author into a directory the caller never saw.
-
-`includeUserRoot: false` mounts a roster over `roots` alone. A deployment that confines presets to its own directories needs it, and so does any test pinning an exact roster — otherwise the machine's real `<dshHome>` decides what the roster contains.
-
-The SHIPPED root stays an assembly fact: it sits beside the installed app's own config, a path only that app can resolve.
+Where presets live is the source row's config ([filesystem source](../agent-presets-filesystem/README.md#config)). The shipped Web composition mounts the filesystem source directly before this row; `apps/cli` patches the shipped root onto that source row at boot.
 
 ### The default preset is a user setting
 
@@ -110,7 +95,7 @@ agent-presets:
   default: minimal
 ```
 
-The value is read per resolution rather than snapshotted, so a hot-reloaded document takes effect on the next session created and every running session stays on the preset it was composed from. Clearing the user field re-inherits the composition default. A default naming a preset no root supplies is stored without complaint and fails at the next `resolve()` — the roster is a live directory, so a name absent now may exist by the time a session asks for it.
+The value is read per resolution rather than snapshotted, so a hot-reloaded document takes effect on the next session created and every running session stays on the preset it was composed from. Clearing the user field re-inherits the composition default. A default naming a preset the source does not supply is stored without complaint and fails at the next `resolve()` — the roster is live, so a name absent now may exist by the time a session asks for it.
 
 ## What a mount rejects
 
@@ -124,11 +109,11 @@ A directly-plugged subtree is absent from `ctx.loader.entries()`, so no boot aud
 
 The package invariant re-checks that last rule on every service notification, because a row that publishes from a timer or an asynchronous continuation would escape the one-shot audit.
 
-## A preset file is an input, never a persistence target
+## A composition is an input, never a persistence target
 
-The Loader writes a tree back to its source file whenever it decides the config changed, and a row disposing its own fiber is enough to decide that: the entry is marked `disabled` and the tree is written. Inherited, that would burn one session's runtime state into a file every session shares — comments stripped by the YAML round trip, and a `writeFile` rejection inside a `setTimeout` for a read-only shipped preset.
+The Loader writes a tree back through `EntryTree.write()` whenever it decides the config changed, and a row disposing its own fiber is enough to decide that: the entry is marked `disabled` and the tree is written. A file-backed tree would burn one session's runtime state into a file every session shares — comments stripped by the YAML round trip, and a `writeFile` rejection inside a `setTimeout` for a read-only shipped preset.
 
-The mounted subtree therefore overrides `write()` as a no-op. Nothing in this package writes a composition; authoring one is a separate, explicit operation.
+The mounted subtree is in-memory and its `write()` is a no-op. Nothing in this package writes a composition; authoring one is the source's explicit operation.
 
 ## Trust
 
@@ -144,11 +129,10 @@ Prefix-stable for the life of an agent: a composition is installed once, before 
 
 ## Known Limitations and Deferred Work
 
-- **A preset outside the writable root is discoverable but not deletable** — `remove()` refuses anything that does not live under the FIRST `user` root, so a deployment that configures its own writable root while leaving `includeUserRoot` on lists the harness-home presets, mounts them, and then answers "it does not live under the writable preset root" for every delete. The roster carries one writable root by design; a deployment that wants only its own sets `includeUserRoot: false`.
 - **A preset cannot be changed once a session has produced anything** — `recompose` re-links a BLANK session's parent scope to another standing mount, and only a blank one: switching a composition that already ran would strand tools the model has called. Changing the default affects only sessions created afterwards.
-- **A generation is keyed on the composition file alone** — the stamp check notices `agent.cordis.yml` changing, not an edit to a skill file or asset beside it; those reach new sessions only once the composition file itself moves or the process restarts.
+- **A generation is keyed on the source stamp alone** — the stamp is the source's identity for the composition rows; an edit to a skill file or asset beside them reaches new sessions only once the stamp itself changes or the process restarts.
 - **A superseded generation is never reclaimed** — sessions already joined keep the generation they run on, and the roster holds no join count that could tell when the last one left, so the whole subtree stays mounted until the process ends. The cost is per generation rather than per session, but it is not free: `dsh-skill-filesystem` watches its roots by default, so each edit-then-create cycle adds a live watcher set. Bounded by how often compositions are edited — which the settings-page authoring flow makes a per-save event rather than a per-deploy one. Reclaiming one needs a joined-agent count on the standing mount; see the `TODO` at `ensureStanding`.
-- **A copy is never mounted to validate** — it is byte-identical to its source, so a source broken on disk yields a copy exactly as broken as the source; discovery's health check marks both rows on the next roster read rather than deferring the failure to a session start.
-- **Health is a shape check, not a mount** — discovery proves the composition parses in the loader dialect and holds named rows, not that every row's module resolves or activates; a row naming an absent package still fails at the first session, which rolls the creation back.
+- **A copy is never mounted to validate** — it is a whole copy of its source, so a source broken at the source yields a copy exactly as broken; the source's health check marks both rows on the next roster read rather than deferring the failure to a session start.
+- **Health is the source's shape check, not a mount** — a source proves the composition is a list of rows it can read, not that every row's module resolves or activates; a row naming an absent package still fails at the first session, which rolls the creation back.
 - **A copy is a snapshot that drifts** — upgrading the deployment does not update copies of shipped presets, and there is no patch semantics at this layer to express "standard plus one change" (that is the bundle layer's `cordis.patch.yml`); the shipped set itself accepts the same cost — `cordis` and `code` are full copies of `standard` — so the whole assembly stays readable in one file.
-- **Root scans are not watched** — every read hits the filesystem instead, which keeps the roster fresh but puts one `readdir` per root on each `list()`.
+- **A source with no files cannot mount relative rows** — `PresetComposition.baseUrl` is what a `./plugin.js` row resolves against, so a bundled-table source supplies package names or absolute locations only.

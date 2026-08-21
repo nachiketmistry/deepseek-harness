@@ -1,4 +1,4 @@
-/** Agent-preset vocabulary shared by discovery, mounting, and consumers. */
+/** Agent-preset vocabulary shared by sources, mounting, and consumers. */
 
 /**
  * Where a preset's composition came from. A `system` preset ships with the
@@ -8,22 +8,28 @@
 export type PresetTrust = 'system' | 'user'
 
 /**
- * Ids a preset directory may use.
+ * Ids a preset may use.
  *
- * The id becomes a path segment, so this is a containment boundary rather than
- * a style rule: `..`, a separator, or an absolute-looking name would place the
- * composition outside the root the deployment authorised. Discovery shares it:
- * a directory whose name no copy could ever claim is not a preset slot.
+ * A source may turn the id into a path segment, so this is a containment
+ * boundary rather than a style rule: `..`, a separator, or an absolute-looking
+ * name would place a composition outside the location the deployment
+ * authorised. Discovery shares it: a directory whose name no copy could ever
+ * claim is not a preset slot.
  */
 export const PRESET_ID = /^[a-z0-9][a-z0-9-]*$/
 
-/** One preset directory that carries a mountable agent composition. */
+/** One preset that carries a mountable agent composition. */
 export interface AgentPreset {
-  /** Stable identifier; the preset directory's name. */
+  /** Stable identifier; for a filesystem source, the preset directory's name. */
   readonly id: string
-  /** Trust recorded from the root this preset was discovered under. */
+  /** Trust recorded from the location this preset was supplied from. */
   readonly trust: PresetTrust
-  /** Absolute path of the preset's agent composition file. */
+  /**
+   * Source-owned locator of the preset's composition. The filesystem source
+   * stores the absolute path of the composition file; another source may use
+   * a non-file locator, and a host that opens preset documents then reports
+   * `opened: false` with it rather than treating it as a directory.
+   */
   readonly path: string
   /** Display name from the preset's own metadata; absent falls back to {@link id}. */
   readonly name?: string
@@ -40,29 +46,14 @@ export interface AgentPreset {
   readonly broken?: string
 }
 
-/** One directory scanned for preset subdirectories. */
-export interface PresetRoot {
-  /** Directory holding one subdirectory per preset; a leading `~` expands. */
-  path: string
-  /** Trust recorded on every preset discovered under this root. */
-  trust: PresetTrust
-}
-
-/** Plugin config: which preset is the default, and where presets live. */
+/** Plugin config: which preset is the default. Where presets live is the source's config. */
 export interface Config {
   /** Preset id mounted when a caller names none. Missing at mount time fails loud. */
   default: string
-  /** Scanned roots in precedence order; an earlier root wins a duplicate id. */
-  roots: PresetRoot[]
-  /**
-   * Append the harness home's `USER_PRESET_DIR` as a `user` root, after every
-   * configured root. False mounts a roster over `roots` alone.
-   */
-  includeUserRoot: boolean
 }
 
 /**
- * No configured root supplies the requested preset.
+ * The source supplies no preset under the requested id.
  *
  * Separate from a mount failure because the two mean different things to a
  * caller: an unknown id is a bad request, while an unusable composition is a
@@ -89,5 +80,42 @@ export class PresetMountError extends Error {
     options?: ErrorOptions,
   ) {
     super(`agent-presets: preset "${presetId}" failed to mount: ${reason}`, options)
+  }
+}
+
+/** A preset id that cannot be used as a location name under a source. */
+export class InvalidPresetIdError extends Error {
+  constructor(
+    /** The rejected id. */
+    readonly presetId: string,
+  ) {
+    super(
+      `agent-presets: preset id ${JSON.stringify(presetId)} must match ${String(PRESET_ID)} — `
+      + 'the id is a directory name, so anything else could escape the preset root',
+    )
+  }
+}
+
+/** A copy target that is already occupied — a copy never overwrites. */
+export class PresetExistsError extends Error {
+  constructor(
+    /** The id that is already taken. */
+    readonly presetId: string,
+  ) {
+    super(
+      `agent-presets: preset "${presetId}" already exists — `
+      + 'a copy never overwrites; delete the existing preset first or choose another id',
+    )
+  }
+}
+
+/** Authoring was attempted where the deployment allows none. */
+export class PresetNotWritableError extends Error {
+  constructor(
+    /** What the caller tried to change, for the diagnostic. */
+    readonly presetId: string,
+    reason: string,
+  ) {
+    super(`agent-presets: preset "${presetId}" cannot be written: ${reason}`)
   }
 }

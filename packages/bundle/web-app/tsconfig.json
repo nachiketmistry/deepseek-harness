@@ -30,6 +30,9 @@
       "path": "../../host/webserver"
     },
     {
+      "path": "../../host/webserver-node"
+    },
+    {
       "path": "../../util/launch-environment"
     },
     {

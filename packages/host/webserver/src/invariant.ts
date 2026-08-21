@@ -28,7 +28,7 @@ const install: InvariantInstaller = (ctx, fail) => {
     const server = ctx.get('webServer') as
       | {
         register(route: { kind: 'exact'; path: string; handler: () => void }): () => void
-        registerUpgrade(route: { path: string; handler: () => void }): () => void
+        registerUpgrade(route: { path: string; open: () => void }): () => void
       }
       | undefined
     if (server === undefined) return // no webserver row in this composition
@@ -36,11 +36,13 @@ const install: InvariantInstaller = (ctx, fail) => {
     // behind, a second register throws the duplicate error — the asymmetry.
     // Each register(probe)() is one register+dispose cycle, so the probe never
     // leaves residue; a leftover from the first cycle makes the second throw.
+    /* v8 ignore next 2 -- probe handlers are never dispatched: the probe only exercises register/dispose. */
     const probe = { kind: 'exact' as const, path: '/__dsh_invariant_probe__', handler: () => {} }
     try {
       server.register(probe)()
       server.register(probe)()
-      const upgradeProbe = { path: '/__dsh_invariant_upgrade_probe__', handler: () => {} }
+      /* v8 ignore next 2 -- the probe socket owner is never opened: the probe only exercises register/dispose. */
+      const upgradeProbe = { path: '/__dsh_invariant_upgrade_probe__', open: () => {} }
       server.registerUpgrade(upgradeProbe)()
       server.registerUpgrade(upgradeProbe)()
     } catch {

@@ -16,13 +16,13 @@ WebSocket carries only the host→browser downlink. All client→host unary call
 
 ## Upgrade and lifecycle boundaries
 
-`dsh-host-webserver` provides an exact upgrade-route registration point alongside ordinary routes, dispatches Node upgrade sockets by pathname only, contains raw-socket errors, and waits for surviving upgraded connections to close during server teardown; it knows nothing about Harness frames or WebSocket messages. `dsh-client-connection` owns the WebSocket handshake, frame output, and stream cancellation, and reuses the `/api` Host/Origin trust fence before upgrade. An untrusted authority or cross-origin Origin is rejected before `ctx.apiProxy.events.*` starts.
+`dsh-host-webserver` provides an exact WebSocket-route registration point alongside ordinary routes (`authorize` decides before the handshake, `open` receives the accepted `WebServerSocket`), and its Node provider `dsh-host-webserver-node` owns the `ws` handshake, contains raw-socket errors, and waits for surviving upgraded connections to close during server teardown; neither knows anything about Harness frames. `dsh-client-connection` owns frame output and stream cancellation over the carrier's socket subset, and reuses the `/api` Host/Origin trust fence in `authorize`. An untrusted authority or cross-origin Origin is rejected before `ctx.apiProxy.events.*` starts.
 
 A browser abort or socket close cancels the corresponding host stream; plugin teardown also waits for that source iterator's cleanup. If a host stream throws midway, the carrier sends one existing `stream/error` frame and then closes the socket; the client treats that frame as connection loss rather than delivering it to a business sink. Each WebSocket reports open independently, and the existing readiness handshake still waits until mux and host are both open and the `host.describe` HTTP call has succeeded before publishing connected.
 
 ## Verification
 
-Webserver contract tests pin upgrade-pathname dispatch, duplicate-registration rejection, disposal, and teardown; connection real-network tests pin each WebSocket's trust check, open, schema envelope, frame order, stream error, and close cancellation; client tests also prove that downlinks create `ws:`/`wss:` URLs while unary calls and `respond` still use HTTP `fetch`. The assembled keyless browser replay continues to cover Chromium, a real host, HTTP uplink, and the full WebSocket downlink chain.
+Webserver contract tests pin WebSocket-route lookup, duplicate-registration rejection, and disposal, and the Node provider's tests pin the handshake, refusal, and teardown; connection real-network tests pin each WebSocket's trust check, open, schema envelope, frame order, stream error, and close cancellation; client tests also prove that downlinks create `ws:`/`wss:` URLs while unary calls and `respond` still use HTTP `fetch`. The assembled keyless browser replay continues to cover Chromium, a real host, HTTP uplink, and the full WebSocket downlink chain.
 
 ## Alternatives considered
 

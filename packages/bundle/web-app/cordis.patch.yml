@@ -115,11 +115,12 @@
 
     # ── layer 2: transport/service ──────────────────────────────────────────────
 
-    # Plain route-registration carrier; host and port come from the app's
-    # webStartup provider, with these deployment fallbacks. The dist is served by
-    # the web-runtime row below through the fallback seat.
+    # The Node web carrier (the `webServer` Service Provider over node:http);
+    # host and port come from the app's webStartup provider, with these
+    # deployment fallbacks. The dist is served by the web-runtime row below
+    # through the fallback seat.
     - id: webserver
-      name: '@deepseek-ai/dsh-host-webserver'
+      name: '@deepseek-ai/dsh-host-webserver-node'
       inject: [webStartup]
       config:
         host: !!js ctx.webStartup.host ?? '127.0.0.1'
@@ -152,10 +153,16 @@
 
     # ── browser plugin roster (dsh.client rows; node halves are layer-2 hosts) ──
 
+    # Where client bundles come from: the Node provider resolves each composed
+    # package's dsh.client declaration and built bundle through node_modules
+    # from the config-tree anchor. A platform host composes its own provider.
+    - id: client-bundle-source
+      name: '@deepseek-ai/dsh-client-bundle-source-node'
+
     # Dual-face: the node half scans this tree, composes window.__DSH_BOOT__,
-    # and serves /plugins/<id>/client.js; the browser half is the module table
-    # the shell kernel constructs before cordis exists (adopted as a plugin
-    # entry by the kernel, never fetched).
+    # and serves /plugins/<id>/client.js from the bundle source; the browser
+    # half is the module table the shell kernel constructs before cordis exists
+    # (adopted as a plugin entry by the kernel, never fetched).
     - id: modules
       name: '@deepseek-ai/dsh-client-modules'
 
@@ -428,17 +435,24 @@
 - id: tool-web
   disabled: true
 
-# The preset roster. `config/agent-presets/` ships with the deployment and is
-# read-only (its entries carry `system` trust); `$DSH_HOME/.agent-presets` is
-# where a person — or an agent — authors their own, and carries the same trust
-# as shell access because a preset IS a composition.
+# The preset roster, two rows. `agent-preset-source` is the filesystem
+# Service Provider of the agent-preset source seam: `config/agent-presets/`
+# ships with the deployment and is read-only (its entries carry `system`
+# trust); `$DSH_HOME/.agent-presets` is where a person — or an agent — authors
+# their own, and carries the same trust as shell access because a preset IS a
+# composition. `agent-presets` is the registry over whatever source is
+# composed: it mounts each preset once and joins sessions to it.
 #
 # Only the SHIPPED root is an assembly fact: it sits beside the installed app's
-# own config, so `apps/cli`'s `composeProfile` resolves and patches it in — the
-# same treatment `distIndex` gets on the webserver row. The writable root is
-# `dsh-agent-presets`' own default (`includeUserRoot`), so a composition that
-# never reaches that patch still finds a person's presets.
+# own config, so `apps/cli`'s `composeProfile` resolves and patches it onto the
+# source row — the same treatment `distIndex` gets on the webserver row. The
+# writable root is the filesystem source's own default (`includeUserRoot`), so
+# a composition that never reaches that patch still finds a person's presets.
 - insert:
+    - id: agent-preset-source
+      name: '@deepseek-ai/dsh-agent-presets-filesystem'
+      config:
+        includeUserRoot: true
     - id: agent-presets
       name: '@deepseek-ai/dsh-agent-presets'
       config:

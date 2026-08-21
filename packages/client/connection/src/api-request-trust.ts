@@ -13,18 +13,23 @@
  * belongs to the webserver config, and this fence is not an auth layer.
  */
 
-import type { IncomingHttpHeaders } from 'node:http'
 import { isLoopbackHostname } from './loopback-hostname.ts'
 
-/** The request facts the fence reads from either HTTP representation. */
+/** The request facts the fence reads. */
 interface ApiTrustRequest {
-  headers: IncomingHttpHeaders | Headers
+  headers: Headers
 }
 
-function header(headers: IncomingHttpHeaders | Headers, name: string): string | undefined {
-  if (headers instanceof Headers) return headers.get(name) ?? undefined
-  const value = headers[name]
-  return typeof value === 'string' ? value : undefined
+function header(headers: Headers, name: string): string | undefined {
+  return headers.get(name) ?? undefined
+}
+
+/**
+ * The fence's refusal.
+ * @returns a fresh 403 response.
+ */
+export function forbidden(): Response {
+  return new Response('forbidden', { status: 403 })
 }
 
 /** Normalized URL of a Host-header authority (hostname lowercased, default port stripped, IPv6 bracketed), or undefined when unparsable. */

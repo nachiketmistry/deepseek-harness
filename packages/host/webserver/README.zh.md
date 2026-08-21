@@ -2,21 +2,19 @@
 
 [English](README.md) | 中文
 
-Web HTTP 与 upgrade route 注册插件（默认导出 `WebServer`，配置为 `{host, port}`）：一个在激活时开始监听的 `node:http` 服务器，提供 `ctx.webServer`。`register(route)` 添加具名的 `exact`／`prefix` HTTP route；`registerUpgrade(route)` 添加精确 pathname 的 upgrade route；同一张表内的重复路径会抛错，因为 route 模式是组合层约定，冲突即配置错误；两者返回的 disposer 都会移除注册。`registerFallback(handler)` 注册一个 handler，处理所有未被具名 route 命中的请求。第二次注册会抛错；随附的 SPA dist 服务器 [`dsh-host-frontend-static`](../frontend-static/README.zh.md) 是该 handler 的所有者，没有注册 handler 时服务器返回 404。index 的启动输入是结构化行：`collectIndexInjections()` 每次调用经一次 `webserver/index-inject` emit 现收一张全新的 `IndexInjection` 表，`renderIndex(html)` 先把行渲染进 index.html 响应体，再按注册顺序应用原始的 `tapIndex(transform)` 转换（`applyIndexTaps(html)`，行无法表达的标记的逃生口）；fallback handler 在每次 index 响应时调用 `renderIndex`，静态部署则把同一批行经 boot 载荷下发，用导出的 `renderIndexInjections` 渲染。`port` 读取正在监听的端口（当 `port` 为 0 时读取 OS 分配的值），`host` 读取配置的绑定宿主（这些是其他插件据以自适应的组合期事实，例如 directory-picker 选择器）。HTTP 匹配顺序固定不变：先在整张表中匹配精确 route，再匹配最长前缀，最后交给 fallback handler。upgrade 只做精确匹配，未命中连接直接关闭；注册顺序不影响请求处理。
+web 载体的 Service Definition（默认导出抽象类 `WebServer`，即 `ctx.webServer`）：基于 Fetch 标准分发的 HTTP 与 WebSocket 路由注册表、带原始变换 tap 的结构化 index 注入表，以及接收所有无路由认领请求的唯一兜底席位。Service Provider 继承 `WebServer`，拥有监听器或平台入口，并把每个请求转发给 `fetch(request)`；[`dsh-host-webserver-node`](../webserver-node/README.zh.md) 是发布的 Web 组合所挂载的 `node:http` provider，平台 provider 以同样方式转发其 fetch 入口。`register(route)` 添加一条具名 `exact`/`prefix` HTTP 路由，其处理器为 `(request: Request) => Response | Promise<Response>`；`registerUpgrade(route)` 为精确路径添加一条 WebSocket 路由，可选的 `authorize(request)` 通过返回 HTTP 应答来拒绝握手，`open(request, socket)` 驱动已接受的 socket 直到其关闭。任一表内的重复路径都会抛错，因为路由模式是组合层面的契约，冲突即配置错误；两个方法都返回移除注册的 disposer。`registerFallback(handler)` 注册唯一一个处理无具名路由匹配请求的处理器。第二次注册会抛错；SPA dist 服务器 [`dsh-host-frontend-static`](../frontend-static/README.zh.md) 是发布版的持有者，未注册时 `fetch` 回答 404。index 启动输入是结构化行：`collectIndexInjections()` 每次调用通过一次 `webserver/index-inject` emit 收集一张新的 `IndexInjection` 表，`renderIndex(html)` 先把这些行渲染进 index.html 正文，再按注册顺序应用原始的 `tapIndex(transform)` 变换（`applyIndexTaps(html)`，面向行无法表达的标记的逃生口）；兜底处理器在每次 index 响应时调用 `renderIndex`，静态部署则通过其启动载荷传送同样的行，并用导出的 `renderIndexInjections` 渲染。`address` 读取 provider 绑定的 `{host, port}`（其他插件据此适配的组合期事实，例如目录选择器与 URL 行），对由平台 fetch 入口驱动的 provider 则为 `undefined`。HTTP 匹配顺序固定：先整表精确匹配，再最长前缀，最后兜底处理器；`upgradeRoute(pathname)` 为 provider 的握手精确匹配 WebSocket 路由。注册顺序不带任何面向请求的语义。
 
-该包不了解任何 harness 概念，也不提供任何文件服务：`/api` HTTP 桥接与下行 WebSocket 是 connection 插件的 route，插件 bundle 与 HMR（热模块替换）事件流是 modules／hmr 插件的 route，dist 服务则属于 fallback 持有者。upgrade handler 拥有协议握手与连接内容；webserver 只交付原始 socket 与 request。`host` 只接受 `127.0.0.1`（默认安全姿态）和 `0.0.0.0`（有意向网络开放）。该服务器只服务浏览器；Electron 通过 `file://` 加载 dist，并经 IPC 桥接承载 fetch。该包从不打印内容；URL 行属于 shell。
+请求 URL 的 authority 就是客户端所寻址的（其 `Host`），因此 `/api` 信任围栏从请求头读取它；`request.signal` 在客户端离开时中止，流式响应（SSE）据此得知应当停止。`WebServerSocket` 是每个 provider 都能提供的 WHATWG 子集（`readyState`、`send`、`close`，以及针对 `message`、`close`、`error` 的 `addEventListener`）；在自身重启后恢复 socket 的 provider 会用恢复的 socket 再次调用该路由的 `open`。路由处理器的 rejection 传播到 provider，由其作为单次请求失败应答；Service Definition 从不退出进程。本包不了解任何 harness 概念，也不提供文件：`/api` 路由与下行 WebSocket 由 connection 插件拥有，插件 bundle 与 HMR 事件流由 modules/hmr 插件拥有，dist 服务由兜底持有者负责。本包从不打印；URL 行属于 shell。
 
-监听失败（EADDRINUSE……）会从激活过程抛出，并以绑定诊断信息拒绝 Loader 组合；失败的候选 fiber 会被 dispose（资源释放）。处理 HTTP 请求时抛错（例如 fallback 持有者的 `decodeURIComponent` 收到格式错误的百分号转义，或客户端在请求体传输中途断开）时，服务器会响应 400；若响应头已经发出，则销毁 socket，并记录 warning，但绝不会退出进程。upgrade handler 抛错或升级 socket 出现传输错误时，会记录 warning 并销毁对应 socket。资源释放会启动 `close()` 与 `closeAllConnections()`，销毁所有受跟踪的升级 socket，并仅在 HTTP server 与这些 socket 均已关闭后返回。
+## Model Experience
 
-## 模型体验
+None, as the package is a Web carrier between the browser and the HTTP/WebSocket routes other plugins register; nothing here reaches a model request.
 
-无。该包只是浏览器与其他插件所注册 HTTP／upgrade route 之间的 Web 载体，其中没有任何内容会进入模型请求。
+#### KV Cache effect
 
-#### KV Cache 影响
+None; this package neither assembles nor sends a provider request.
 
-无；该包既不组装也不发送提供方请求。
+## 已知限制与待办
 
-## 已知限制与暂缓事项
-
-- **不提供 TLS、认证或来源策略**：绑定非回环地址会向对应网络公开服务器；面向部署的加固措施（或在前方放置真正的反向代理）有意不纳入面向开发环境的 v1。
-- **Socket 选项固定不变**：配置只选择绑定宿主与端口；在具体部署产生需求前，backlog 和其他 socket 设置仍保持内部实现。
+- **没有 TLS、认证或 origin 策略** — 载体分发其 provider 接受的一切；部署加固属于 provider 或其前置的反向代理。
+- **WebSocket 路由仅支持精确路径** — 一个 socket 只有一个协议持有者，且没有已发布的消费者需要前缀匹配的 socket。

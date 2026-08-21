@@ -17,9 +17,9 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
-import Include from '@deepseek-ai/cordis-plugin-include'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import AgentPresets, { COMPOSITION_FILE, type Config } from '@deepseek-ai/dsh-agent-presets'
+import AgentPresets from '@deepseek-ai/dsh-agent-presets'
+import FilesystemAgentPresetSource, { COMPOSITION_FILE, type Config } from '@deepseek-ai/dsh-agent-presets-filesystem'
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
 const SYSTEM_ROOT = join(FIXTURES, 'system')
@@ -46,13 +46,12 @@ async function roster(config: Partial<Config> = {}): Promise<Context> {
   const ctx = new Context()
   ctx.baseUrl = pathToFileURL(FIXTURES).href + '/'
   await ctx.plugin(Loader)
-  ctx.loader.builtins.include = Include
-  await ctx.plugin(AgentPresets, {
-    default: 'standard',
+  await ctx.plugin(FilesystemAgentPresetSource, {
     roots: [{ path: SYSTEM_ROOT, trust: 'system' as const }],
     includeUserRoot: true,
     ...config,
   })
+  await ctx.plugin(AgentPresets, { default: 'standard' })
   return ctx
 }
 
@@ -68,7 +67,7 @@ describe('the harness-home preset root', () => {
     // every other case here passes the field explicitly. The cast stands for
     // the untyped document the Loader hands the schema, which is where a
     // composition that omits the key actually comes from.
-    const parsed = AgentPresets.Config({ default: 'standard' } as unknown as Config)
+    const parsed = FilesystemAgentPresetSource.Config({} as unknown as Config)
 
     expect(parsed).toMatchObject({ includeUserRoot: true, roots: [] })
   })

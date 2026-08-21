@@ -16,7 +16,7 @@
       "path": "../../../vendor/schemastery"
     },
     {
-      "path": "../../../vendor/include"
+      "path": "../../../vendor/loader"
     },
     {
       "path": "../../core/agent"
@@ -32,12 +32,6 @@
     },
     {
       "path": "../../settings/settings"
-    },
-    {
-      "path": "../../util/atomic-write"
-    },
-    {
-      "path": "../../util/home-paths"
     },
     {
       "path": "../../runtime-diagnostics/invariants"

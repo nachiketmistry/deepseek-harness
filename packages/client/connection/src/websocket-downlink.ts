@@ -1,9 +1,6 @@
-/** Host-side WebSocket carrier for the two server-to-browser event streams. */
+/** Host-side frame pump for the two server-to-browser WebSocket event streams. */
 
-import { randomUUID } from 'node:crypto'
-import type { IncomingMessage } from 'node:http'
-import type { Duplex } from 'node:stream'
-import WebSocket, { WebSocketServer } from 'ws'
+import { WEBSOCKET_OPEN, type WebServerSocket } from '@deepseek-ai/dsh-host-webserver'
 import type {
   ApiProxy, HostFrame, MuxFrame, RpcRequest, ServerRequest,
 } from '@deepseek-ai/dsh-host-apiproxy/api'
@@ -20,22 +17,16 @@ function serverRequest(frame: RpcRequest<Frame>): ServerRequest {
   }
 }
 
-function send(socket: WebSocket, frame: RpcRequest<Frame>): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (socket.readyState !== WebSocket.OPEN) {
-      reject(new Error('websocket downlink closed before frame delivery'))
-      return
-    }
-    socket.send(JSON.stringify(serverRequest(frame)), (error) => {
-      if (error) reject(error)
-      else resolve()
-    })
-  })
+function send(socket: WebServerSocket, frame: RpcRequest<Frame>): void {
+  if (socket.readyState !== WEBSOCKET_OPEN) {
+    throw new Error('websocket downlink closed before frame delivery')
+  }
+  socket.send(JSON.stringify(serverRequest(frame)))
 }
 
 function failureFrame(error: unknown): RpcRequest<Frame> {
   return {
-    rpcId: RpcId(randomUUID()),
+    rpcId: RpcId(crypto.randomUUID()),
     payload: {
       type: 'stream/error',
       error: { code: 'internal', message: String(error), details: {} },
@@ -44,110 +35,86 @@ function failureFrame(error: unknown): RpcRequest<Frame> {
 }
 
 /**
- * Owns WebSocket negotiation and frame pumping for the connection plugin's
- * two downlinks. Client messages are a protocol violation: upstream traffic
- * remains on HTTP.
+ * Pumps the connection plugin's two downlinks onto carrier-accepted sockets.
+ * Client messages are a protocol violation: upstream traffic remains on HTTP.
  */
 export class WebSocketDownlinks {
-  private readonly server = new WebSocketServer({ noServer: true })
+  private readonly sockets = new Set<WebServerSocket>()
   private readonly pumps = new Set<Promise<void>>()
 
   /** @param api - host API supplying the typed event streams. */
   constructor(private readonly api: ApiProxy) {}
 
   /**
-   * Upgrade one socket and pump the mux stream until either side closes.
-   * @param req - HTTP upgrade request.
-   * @param socket - Raw socket transferred by the HTTP server.
-   * @param head - Bytes already read after the upgrade headers.
+   * Pump the mux stream onto one accepted socket until either side closes.
+   * @param socket - the accepted server-side socket.
+   * @returns resolves when the pump ends.
    */
-  handleMux(req: IncomingMessage, socket: Duplex, head: Buffer): void {
-    this.upgrade(req, socket, head, signal => this.api.events.mux({
-      rpcId: RpcId(randomUUID()),
+  openMux(socket: WebServerSocket): Promise<void> {
+    return this.open(socket, signal => this.api.events.mux({
+      rpcId: RpcId(crypto.randomUUID()),
       payload: {},
     }, signal))
   }
 
   /**
-   * Upgrade one socket and pump the host stream until either side closes.
-   * @param req - HTTP upgrade request.
-   * @param socket - Raw socket transferred by the HTTP server.
-   * @param head - Bytes already read after the upgrade headers.
+   * Pump the host stream onto one accepted socket until either side closes.
+   * @param socket - the accepted server-side socket.
+   * @returns resolves when the pump ends.
    */
-  handleHost(req: IncomingMessage, socket: Duplex, head: Buffer): void {
-    this.upgrade(req, socket, head, signal => this.api.events.host({
-      rpcId: RpcId(randomUUID()),
+  openHost(socket: WebServerSocket): Promise<void> {
+    return this.open(socket, signal => this.api.events.host({
+      rpcId: RpcId(crypto.randomUUID()),
       payload: {},
     }, signal))
   }
 
   /**
-   * Terminate owned sockets and await the no-server acceptor plus frame pumps.
+   * Close every owned socket and await the frame pumps.
    * @returns A promise resolving after every socket and source iterator stops.
    */
   async close(): Promise<void> {
-    for (const socket of this.server.clients) socket.terminate()
-    await new Promise<void>((resolve, reject) => {
-      this.server.close((error) => {
-        if (error === undefined) resolve()
-        else reject(error)
-      })
-    })
+    for (const socket of this.sockets) socket.close(1001, 'server shutting down')
     await Promise.all(this.pumps)
   }
 
-  private upgrade<F extends Frame>(
-    req: IncomingMessage,
-    socket: Duplex,
-    head: Buffer,
-    open: (signal: AbortSignal) => AsyncIterable<RpcRequest<F>>,
-  ): void {
-    this.server.handleUpgrade(req, socket, head, (websocket) => {
-      const abort = new AbortController()
-      websocket.once('close', () => { abort.abort() })
-      websocket.once('error', () => { abort.abort() })
-      websocket.once('message', () => {
-        websocket.close(1008, 'downlink only')
-      })
-      const pump = this.pump(websocket, open(abort.signal), abort)
-      this.pumps.add(pump)
-      void pump.then(() => { this.pumps.delete(pump) })
+  private open<F extends Frame>(
+    socket: WebServerSocket,
+    frames: (signal: AbortSignal) => AsyncIterable<RpcRequest<F>>,
+  ): Promise<void> {
+    const abort = new AbortController()
+    socket.addEventListener('close', () => { abort.abort() })
+    socket.addEventListener('error', () => { abort.abort() })
+    socket.addEventListener('message', () => {
+      socket.close(1008, 'downlink only')
     })
+    this.sockets.add(socket)
+    const pump = this.pump(socket, frames(abort.signal), abort).finally(() => {
+      this.sockets.delete(socket)
+    })
+    this.pumps.add(pump)
+    void pump.then(() => { this.pumps.delete(pump) })
+    return pump
   }
 
   private async pump<F extends Frame>(
-    socket: WebSocket,
+    socket: WebServerSocket,
     frames: AsyncIterable<RpcRequest<F>>,
     abort: AbortController,
   ): Promise<void> {
     try {
-      for await (const frame of frames) await send(socket, frame)
+      for await (const frame of frames) send(socket, frame)
     } catch (error) {
       if (!abort.signal.aborted) {
         try {
-          await send(socket, failureFrame(error))
+          send(socket, failureFrame(error))
         } catch {
           // Socket loss won the race; no downstream remains to receive the failure frame.
         }
       }
     } finally {
       abort.abort()
-      if (socket.readyState === WebSocket.OPEN) socket.close()
+      if (socket.readyState === WEBSOCKET_OPEN) socket.close()
     }
   }
-}
-
-/**
- * Reject an untrusted upgrade before protocol negotiation.
- * @param socket - Raw HTTP socket that remains owned by the caller.
- */
-export function rejectWebSocketUpgrade(socket: Duplex): void {
-  socket.end([
-    'HTTP/1.1 403 Forbidden',
-    'Connection: close',
-    'Content-Type: text/plain; charset=utf-8',
-    'Content-Length: 9',
-    '',
-    'forbidden',
-  ].join('\r\n'))
 }

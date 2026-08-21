@@ -62,7 +62,7 @@ TypeScript 以 solution 根引用的**两个聚合 program** 检查（`tsconfig.
 |---|---|---|---|
 | 前置层 | `dsh-host-apiproxy` | TS/zod 定义 (api/)+ fetch 抽象 (fetch/：handler + 客户端基类) | 做简单、每个消费方都要；Node/浏览器皆可 import；协议内容见下文「消息协议」起各节；client 不得经 ctx 绕开 api |
 | 装配层 | `dsh-host-runtime` | 插件组合 + ApiProxy 集成 + web UI 插件挂载（覆盖八个 dsh.client 包的内存 Loader 树）；host 级配置归属地（defaults/persistenceRoot，将来用户 profile） | 装什么插件、给什么默认值只在这里定；壳不得改装配 |
-| 承载层 | `dsh-host-webserver` | Web HTTP 与 upgrade：静态服务 + `/api/*`→handler 转发 + WebSocket upgrade route + close 语义；插件 bundle 端点 + `__DSH_BOOT__` manifest（元数据清单）注入（由 web 插件注册表供给） | Web（浏览器访问）专用；零 workspace 依赖（注册表经结构注入到达）；Electron 不复用它 |
+| 承载层 | `dsh-host-webserver`（Service Definition）+ `dsh-host-webserver-node`（Node provider） | 按 Fetch 标准分发的 Web HTTP 与 WebSocket 路由：静态服务 + `/api/*`→handler 转发 + WebSocket 路由 + close 语义；插件 bundle 端点 + `__DSH_BOOT__` manifest（元数据清单）注入（由 web 插件注册表供给） | Web（浏览器访问）专用；Service Definition 零 workspace 依赖（注册表经结构注入到达）；Electron 不复用它 |
 | client 库 | `dsh-client-ui-slots` / `dsh-client-ui-primitives` | slot 约定 / 纯 React 原子组件 | 由壳播种进 loader 模块表 |
 | client 插件 | `dsh-client-connection` / `dsh-client-runtime` / `dsh-client-ui-theme` / `dsh-client-ui-renderer` / 功能 UI 包 | 浏览器侧 Cordis 插件树：wire 消费方、核心服务、主题、React 渲染与功能组合——见 Web 客户端架构笔记 | 双入口（node 半边=空 apply；实现在 `src/client/`）；跨插件值协作经服务与 slot 完成 |
 | 应用 | `@deepseek-ai/dsh`（apps/cli）+ `dsh-web-frontend`（apps/web，vite 应用） | bin 粗分发 + 每个应用一个拼装模块（web.ts / headless.ts）；vite 应用是 `dsh-client-web` 壳表面之上的薄 main | 各应用使用动态 import，因此不会互相加载；dist 定位等 workspace 知识留在 app |

@@ -12,7 +12,9 @@ Status: implemented
 
 ## 决策
 
-**preset** 是一个目录，其中放置一份 `agent.cordis.yml`。agent 工厂的 `setup(agentCtx)` 把它作为 Cordis `include` 子树，挂载到该 agent 的 scope 上下文之下。entry 上下文沿原型链连到子树被挂载时所在的上下文，因此 preset 内部的每一次注册都落进该 agent 的分层，并随 agent 一起卸载。没有任何注册表新增分层，也没有任何已在运行的会话被触及。
+**preset** 是一份插件行列表——在磁盘上是一个放置一份 `agent.cordis.yml` 的目录。agent 工厂的 `setup(agentCtx)` 把这些行作为内存中的 Loader entry 树，挂载到该 agent 的 scope 上下文之下。entry 上下文沿原型链连到子树被挂载时所在的上下文，因此 preset 内部的每一次注册都落进该 agent 的分层，并随 agent 一起卸载。没有任何注册表新增分层，也没有任何已在运行的会话被触及。
+
+这些行从哪里来是一条能力 seam，因此没有磁盘的宿主可以从内置表提供 preset：`dsh-agent-presets` 拥有 `AgentPresetSource` Service Definition（`list`、`stamp`、`composition`、`read`、`copy`、`remove`）以及消费它的注册表；`dsh-agent-presets-filesystem` 是 preset 目录之上的 Service Provider，也是随附组装唯一挂载的提供方（`agent-preset-source` 紧接在 `agent-presets` 之前）。注册表从不读文件：来源把解析好的行、读取时所处的 stamp，以及相对行据以解析的基址交给它。
 
 组装划分为两个平面，依据是什么必须共享，而不是什么感觉上与 agent 有关：
 
@@ -34,7 +36,7 @@ Status: implemented
 **有效默认值在每次解析时读取，绝不保存快照。** 缓存下来就需要一个 `watch` 订阅和一条重载路径才能保持诚实，而解析后的 scope 本来就会重读热重载过的文档。读穿也不只是省事，它让边界本身是对的：新值作用于**下一个新建的会话**，每个运行中的会话保持它被构建时的那份组装。这条不变量正是 session 日志从另一侧执行的同一条——header 记录会话**创建时**的 id，此后空白期的任何切换由 `agent-preset/selected` 事件记录，因此读取方解析的是两者之和（`resolveSessionPreset`）、绝不单看 header：恢复重建的是其历史所产出的那份组装而不是当下的默认值，冷读记录的 presenter 在那份组装的层里解析，网关也会拒绝把一个活着的会话收编到它当前运行的 preset 以外的 preset 之下。快照会让两者恰好在设置改变的那一刻各说各话。
 
 
-**直接挂载的子树对启动审计不可见。** 它不会把自己关联到 `Entry`，因此不在 `ctx.loader.entries()` 中，`assertEntriesActivated` 也看不到它。改由挂载过程自行校验各行，通过一个会公开自身 tree 的 `Include` 子类读取。
+**直接挂载的子树对启动审计不可见。** 它不会把自己关联到 `Entry`，因此不在 `ctx.loader.entries()` 中，`assertEntriesActivated` 也看不到它。改由挂载过程自行校验各行，通过一个会公开自身 tree、并用 `root.update()` 挂载来源各行的 `EntryTree` 子类读取。每次挂载都克隆这些行，因为 Loader 按身份存放每一行的选项并向其中写入。
 
 **preset 能写出 group，是因为 app 注册了它。** 跨行共享 realm 就是一个 `cordis:group` 行，而住在本工作区之外的 preset——也就是 Harness home 下由人或 agent 创作的那些，正是这套设计的目的——无法按名字解析 `@cordisjs/plugin-group`：Node 向上查找 `node_modules` 的路径从那里永远走不到 harness。因此 `boot()` 把 `cordis:group` 与 `cordis:include` 并排注册为 loader builtin，两者都经由环境模块管线加载，而不依赖被包含树自身的说明符解析。没有它，上文那套 `isolate` 词汇就只能一行一行地表达，提供方也永远无法与它的消费方归入同一组。
 
@@ -60,7 +62,7 @@ Status: implemented
 
 **真实组装测试若禁用了某个宿主行，就无法审计该行。** web 组装测试把 `api-gateway`——也就是 api-proxy 本身——当作「有外部副作用的行」禁用了，而它恰恰是那个会以 pending 注入点名此次断裂的行。现在它在启用 api-proxy、并替换为 browse 目录选择器的前提下引导，启动审计因此覆盖整个宿主平面的注入图；只有端口、资源目录与遥测导出器仍然关闭。
 
-**preset 的包名必须从 harness 解析，而非从 preset 解析。** `EntryTree.import()` 按行所属树的 `baseUrl` 解析，而 `Include` 把它设为组装文件所在的目录。这对相对标识符是对的，对包名却是致命的：本地创作的 preset 位于用户主目录之下，Node 向上查找 `node_modules` 永远够不到已安装的 harness，因此每一个 `@deepseek-ai/dsh-*` 行都会导入失败，整个 preset 无法挂载。随部署提供的 preset 掩盖了这一点——它们本就在安装目录之内。挂载在插入子树之前先记录宿主组装的基址，并把裸标识符送往那里，同时让相对路径继续从 preset 解析，使它自带的文件仍随它一同迁移。发现它的正是那个把 preset 写入临时根目录的真实组装测试。
+**preset 的包名必须从 harness 解析，而非从 preset 解析。** `EntryTree.import()` 按行所属树的 `baseUrl` 解析，而 preset 树把它设为来源提供的 `baseUrl`（对文件系统来源即组装文件所在的目录）。这对相对标识符是对的，对包名却是致命的：本地创作的 preset 位于用户主目录之下，Node 向上查找 `node_modules` 永远够不到已安装的 harness，因此每一个 `@deepseek-ai/dsh-*` 行都会导入失败，整个 preset 无法挂载。随部署提供的 preset 掩盖了这一点——它们本就在安装目录之内。挂载在插入子树之前先记录宿主组装的基址，并把裸标识符送往那里，同时让相对路径继续从 preset 解析，使它自带的文件仍随它一同迁移。发现它的正是那个把 preset 写入临时根目录的真实组装测试。
 
 **preset id 对模型可见，必须写入日志。** 它决定工具集与提示词，因此被恢复的会话必须还原同一份组装；记录它属于会话事实，而非运行时状态。它与 `cwd` 并列写在会话头部，并由会话摘要携带，使选择器显示的是某个会话实际运行的 preset，而非部署当前的默认值。
 

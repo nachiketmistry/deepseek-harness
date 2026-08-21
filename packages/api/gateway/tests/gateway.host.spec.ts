@@ -1,10 +1,8 @@
-import { createServer } from 'node:http'
-import type { AddressInfo } from 'node:net'
 import { describe, expect, it } from 'vitest'
 import { Context, Service, symbols } from '@deepseek-ai/cordis'
 import { z } from 'zod'
 import { apply as applyConnection, inject as connectionInject } from '@deepseek-ai/dsh-client-connection'
-import type { WebServer, WebRoute } from '@deepseek-ai/dsh-host-webserver'
+import { WebServer } from '@deepseek-ai/dsh-host-webserver'
 import {
   bindTypertRemote,
   Remote,
@@ -137,35 +135,18 @@ class FakeConnectionService extends Service {
   }
 }
 
-function fakeHttpServer(routes: WebRoute[]): Pick<WebServer, 'register' | 'tapIndex' | 'port'> {
-  return {
-    register(route) {
-      if (routes.some(candidate => candidate.kind === route.kind && candidate.path === route.path)) {
-        throw new Error(`duplicate route ${route.path}`)
-      }
-      routes.push(route)
-      return () => { routes.splice(routes.indexOf(route), 1) }
-    },
-    tapIndex: () => () => {},
-    port: 0,
-  }
+/** A carrier with no listener of its own: the platform-driven provider shape. */
+class TestWebServer extends WebServer {
+  override get address(): undefined { return undefined }
 }
 
-async function serveRoute(route: WebRoute): Promise<{ readonly origin: string; close(): Promise<void> }> {
-  const server = createServer((request, response) => {
-    void route.handler(request, response)
-  })
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-  const address = server.address() as AddressInfo
-  return {
-    origin: `http://127.0.0.1:${String(address.port)}`,
-    close: () => new Promise<void>((resolve, reject) => {
-      server.close((error) => {
-        if (error === undefined || error === null) resolve()
-        else reject(error)
-      })
-    }),
-  }
+/** One loopback request against the carrier's route registry. */
+function apiRequest(server: WebServer, path: string, body?: unknown): Promise<Response> {
+  return server.fetch(new Request(`http://127.0.0.1${path}`, {
+    method: 'POST',
+    headers: body === undefined ? { host: '127.0.0.1' } : { host: '127.0.0.1', 'content-type': 'application/json' },
+    body: body === undefined ? null : JSON.stringify(body),
+  }))
 }
 
 class FirstSharedService extends Service {
@@ -1102,8 +1083,7 @@ describe('TypertGatewayService', () => {
 
   it('dispatches claimed invocations through /api and leaves unclaimed endpoints to its fallback', async () => {
     const ctx = new Context().extend({ fixtureScope: 'http-caller' })
-    const routes: WebRoute[] = []
-    ctx.provide('webServer', fakeHttpServer(routes) as WebServer)
+    const server = new TestWebServer(ctx)
     const connectionFiber = ctx.plugin({ inject: [...connectionInject], apply: applyConnection })
     await connectionFiber
     await ctx.plugin(TypertRegistry)
@@ -1114,19 +1094,13 @@ describe('TypertGatewayService', () => {
     const removeLookup = registerAgentLookup(ctx, { id: 'agent-1' })
     const removeStrict = registerStrict(ctx, [createDescriptor()])
     let strictActive = true
-    expect(routes).toHaveLength(1)
-    const server = await serveRoute(routes[0]!)
 
     try {
-      const response = await fetch(`${server.origin}/api/goals/create`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          type: 'client-request',
-          rpcId: 'rpc-http',
-          method: 'goals/create',
-          payload: { args: { agentId: 'agent-1', request: { title: '  ship  ' } } },
-        }),
+      const response = await apiRequest(server, '/api/goals/create', {
+        type: 'client-request',
+        rpcId: 'rpc-http',
+        method: 'goals/create',
+        payload: { args: { agentId: 'agent-1', request: { title: '  ship  ' } } },
       })
       expect(response.status).toBe(200)
       await expect(response.json()).resolves.toEqual({
@@ -1138,15 +1112,11 @@ describe('TypertGatewayService', () => {
         },
       })
 
-      const invalid = await fetch(`${server.origin}/api/goals/create`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          type: 'client-request',
-          rpcId: 'rpc-invalid',
-          method: 'goals/create',
-          payload: { invalid: true },
-        }),
+      const invalid = await apiRequest(server, '/api/goals/create', {
+        type: 'client-request',
+        rpcId: 'rpc-invalid',
+        method: 'goals/create',
+        payload: { invalid: true },
       })
       expect(invalid.status).toBe(200)
       const invalidBody = await invalid.json() as unknown
@@ -1162,15 +1132,11 @@ describe('TypertGatewayService', () => {
 
       await removeStrict()
       strictActive = false
-      const withdrawn = await fetch(`${server.origin}/api/goals/create`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          type: 'client-request',
-          rpcId: 'rpc-withdrawn',
-          method: 'goals/create',
-          payload: { args: { agentId: 'agent-1', request: { title: 'ship' } } },
-        }),
+      const withdrawn = await apiRequest(server, '/api/goals/create', {
+        type: 'client-request',
+        rpcId: 'rpc-withdrawn',
+        method: 'goals/create',
+        payload: { args: { agentId: 'agent-1', request: { title: 'ship' } } },
       })
       expect(withdrawn.status).toBe(200)
       const withdrawnBody = await withdrawn.json() as unknown
@@ -1184,17 +1150,16 @@ describe('TypertGatewayService', () => {
       })
       expect(JSON.stringify(withdrawnBody)).toContain('strict definition was withdrawn')
 
-      const unclaimed = await fetch(`${server.origin}/api/legacy/list`, { method: 'POST' })
+      const unclaimed = await apiRequest(server, '/api/legacy/list')
       expect(unclaimed.status).toBe(404)
     } finally {
-      await server.close()
       if (strictActive) await removeStrict()
       await removeLookup()
       await goalFiber.dispose()
       await gatewayFiber.dispose()
       await connectionFiber.dispose()
     }
-    expect(routes).toHaveLength(0)
+    expect((await apiRequest(server, '/api/goals/create')).status).toBe(404)
   })
 })
 

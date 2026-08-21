@@ -100,13 +100,13 @@ async function bootWeb(
     // `default` here is the COMPOSITION default — the base layer the settings
     // document overrides.
     {
-      id: 'agent-presets',
+      id: 'agent-preset-source',
       config: {
-        default: 'standard',
         roots: [{ path: join(CONFIG_DIR, 'agent-presets'), trust: 'system' }],
         includeUserRoot: false,
       },
     },
+    { id: 'agent-presets', config: { default: 'standard' } },
     ...extra,
   ]
   // The surface is patch layers over an empty preset root, so the root sits
@@ -489,9 +489,8 @@ describe('product Bundle and user-preset intersection', () => {
     )
     return await bootWeb(settingsFile, [
       {
-        id: 'agent-presets',
+        id: 'agent-preset-source',
         config: {
-          default: 'standard',
           roots: [
             { path: join(CONFIG_DIR, 'agent-presets'), trust: 'system' },
             { path: userRoot, trust: 'user' },
@@ -733,9 +732,8 @@ describe('a launcher that configures no writable root', () => {
     // Only the shipped root, exactly what `composeProfile` supplies; the
     // writable one is the roster's own default rather than this patch's job.
     derivedCtx = await bootWeb(settingsFile, [{
-      id: 'agent-presets',
+      id: 'agent-preset-source',
       config: {
-        default: 'standard',
         roots: [{ path: join(CONFIG_DIR, 'agent-presets'), trust: 'system' }],
         includeUserRoot: true,
       },
@@ -778,9 +776,8 @@ describe('authoring a preset on the shipped composition', () => {
     const settingsFile = join(await mkdtemp(join(tmpdir(), 'dsh-preset-authoring-settings-')), 'settings.yaml')
     await writeFile(settingsFile, '{}\n')
     authorCtx = await bootWeb(settingsFile, [{
-      id: 'agent-presets',
+      id: 'agent-preset-source',
       config: {
-        default: 'standard',
         roots: [
           { path: join(CONFIG_DIR, 'agent-presets'), trust: 'system' },
           // The root does not exist yet: a deployment whose user has authored

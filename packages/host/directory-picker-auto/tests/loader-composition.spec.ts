@@ -16,7 +16,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
-import HttpServer from '@deepseek-ai/dsh-host-webserver'
+import { WebServer } from '@deepseek-ai/dsh-host-webserver'
+import NodeWebServer from '@deepseek-ai/dsh-host-webserver-node'
 import type { DirectoryPicker } from '@deepseek-ai/dsh-host-directory-picker'
 import BrowseDirectoryPicker from '@deepseek-ai/dsh-host-directory-picker-browse'
 import NativeDirectoryPicker from '@deepseek-ai/dsh-host-directory-picker-native'
@@ -95,7 +96,7 @@ async function loadComposition(
   root = await mkdtemp(join(tmpdir(), 'dsh-directory-picker-auto-'))
   const configPath = join(root, 'cordis.yml')
   await writeFile(configPath, [
-    "- name: '@deepseek-ai/dsh-host-webserver'",
+    "- name: '@deepseek-ai/dsh-host-webserver-node'",
     '  config:',
     `    host: '${bindHost}'`,
     '    port: 0',
@@ -108,7 +109,7 @@ async function loadComposition(
   await context.plugin(Loader)
   context.loader.builtins.include = Include
   const modules = new Map<string, unknown>([
-    ['@deepseek-ai/dsh-host-webserver', HttpServer],
+    ['@deepseek-ai/dsh-host-webserver-node', NodeWebServer],
     [AUTO, DirectoryPickerAuto],
     [NATIVE, NativeDirectoryPicker],
     [BROWSE, BrowseDirectoryPicker],
@@ -153,6 +154,21 @@ function stubAttendedHost(): void {
   vi.stubEnv('SSH_TTY', '')
   vi.stubEnv('DISPLAY', ':0')
 }
+
+describe('carrier address', () => {
+  it('refuses a webServer provider that owns no listener', async () => {
+    class ListenerlessWebServer extends WebServer {
+      get address(): undefined { return undefined }
+    }
+    const ctx = new Context()
+    await ctx.plugin(Loader)
+    new ListenerlessWebServer(ctx)
+    await expect(DirectoryPickerAuto.apply(ctx)).rejects.toThrow(
+      'directory-picker-auto: the webServer provider owns no listener; a native chooser needs the Node carrier',
+    )
+    await ctx.fiber.dispose()
+  })
+})
 
 describe('real Loader composition', () => {
   // The 60s budget covers this file's static imports (webserver plus both

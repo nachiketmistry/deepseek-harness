@@ -3,13 +3,13 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-attachment'
 // Activates the webServer Context merge used below.
-import type { WebRoute, WebUpgradeRoute } from '@deepseek-ai/dsh-host-webserver'
+import type { WebRoute, WebServerSocket, WebSocketRoute } from '@deepseek-ai/dsh-host-webserver'
 import { toFetchHandler } from '@deepseek-ai/dsh-host-apiproxy'
 import { API_PATH, HOST_EVENTS_PATH, MUX_EVENTS_PATH } from './api-path.ts'
-import { bridge, DEFAULT_MAX_REQUEST_BODY_BYTES } from './http-bridge.ts'
-import { assertTrustedAuthority, isTrustedApiRequest } from './api-request-trust.ts'
+import { DEFAULT_MAX_REQUEST_BODY_BYTES, withBodyLimit } from './body-limit.ts'
+import { assertTrustedAuthority, forbidden, isTrustedApiRequest } from './api-request-trust.ts'
 import { HostConnectionService } from './rpc-host.ts'
-import { rejectWebSocketUpgrade, WebSocketDownlinks } from './websocket-downlink.ts'
+import { WebSocketDownlinks } from './websocket-downlink.ts'
 
 export type {
   ConnectionRpcAuthority,
@@ -136,7 +136,7 @@ export function apply(ctx: Context, config?: ConnectionConfig): void {
   for (const entry of trustedHosts) assertTrustedAuthority(entry)
   if (ctx.get('apiProxy') !== undefined) assertImageBodyCapacity(ctx, maxRequestBodyBytes)
   const connection = new HostConnectionService(ctx, trustedHosts)
-  const fetchHandler = connection.createSharedFetchHandler(API_PATH, {
+  const fetchHandler = withBodyLimit(connection.createSharedFetchHandler(API_PATH, {
     async fetch(request) {
       const pathname = new URL(request.url).pathname
       const method = pathname.startsWith(`${API_PATH}/`)
@@ -157,17 +157,13 @@ export function apply(ctx: Context, config?: ConnectionConfig): void {
       if (apiProxy === undefined) return new Response('not found', { status: 404 })
       return toFetchHandler(apiProxy).fetch(request)
     },
-  })
+  }), maxRequestBodyBytes)
   const route: WebRoute = {
     kind: 'prefix',
     path: API_PATH,
-    handler: async (req, res) => {
-      if (!isTrustedApiRequest(req, trustedHosts)) {
-        res.writeHead(403)
-        res.end('forbidden')
-        return
-      }
-      await bridge(req, res, fetchHandler, maxRequestBodyBytes)
+    handler: (request) => {
+      if (!isTrustedApiRequest(request, trustedHosts)) return forbidden()
+      return fetchHandler.fetch(request)
     },
   }
   ctx.effect(() => ctx.webServer.register(route), 'client-connection: /api route')
@@ -176,21 +172,17 @@ export function apply(ctx: Context, config?: ConnectionConfig): void {
     const downlinks = new WebSocketDownlinks(apiCtx.apiProxy)
     const registerDownlink = (
       path: string,
-      handle: WebUpgradeRoute['handler'],
+      open: (socket: WebServerSocket) => Promise<void>,
     ): void => {
-      apiCtx.effect(() => apiCtx.webServer.registerUpgrade({
+      const downlink: WebSocketRoute = {
         path,
-        handler: (req, socket, head) => {
-          if (!isTrustedApiRequest(req, trustedHosts)) {
-            rejectWebSocketUpgrade(socket)
-            return
-          }
-          return handle(req, socket, head)
-        },
-      }), `client-connection: ${path} WebSocket`)
+        authorize: request => (isTrustedApiRequest(request, trustedHosts) ? undefined : forbidden()),
+        open: (_request, socket) => open(socket),
+      }
+      apiCtx.effect(() => apiCtx.webServer.registerUpgrade(downlink), `client-connection: ${path} WebSocket`)
     }
     apiCtx.effect(() => () => downlinks.close(), 'client-connection: WebSocket downlinks')
-    registerDownlink(MUX_EVENTS_PATH, (req, socket, head) => { downlinks.handleMux(req, socket, head) })
-    registerDownlink(HOST_EVENTS_PATH, (req, socket, head) => { downlinks.handleHost(req, socket, head) })
+    registerDownlink(MUX_EVENTS_PATH, socket => downlinks.openMux(socket))
+    registerDownlink(HOST_EVENTS_PATH, socket => downlinks.openHost(socket))
   })
 }

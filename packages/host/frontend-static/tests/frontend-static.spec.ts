@@ -1,12 +1,12 @@
 /**
  * REAL-composition coverage: a test-only cordis.yml booted through the
- * vendored Loader mounts the webserver and frontend-static rows, and every
+ * vendored Loader mounts the Node webserver and frontend-static rows, and every
  * assertion observes the served HTTP surface — asset serving, explicit index
  * entry points with index taps, 404 misses, traversal rejection, 405 on non-
  * GET/HEAD, and seat release on fiber disposal (HMR safety).
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -14,7 +14,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
-import HttpServer from '@deepseek-ai/dsh-host-webserver'
+import NodeWebServer from '@deepseek-ai/dsh-host-webserver-node'
 import * as FrontendStatic from '../src/index.ts'
 
 let root: string | undefined
@@ -40,7 +40,7 @@ async function loadComposition(): Promise<Context> {
   await mkdir(join(dist, 'empty'))
   const configPath = join(root, 'cordis.yml')
   await writeFile(configPath, [
-    "- name: '@deepseek-ai/dsh-host-webserver'",
+    "- name: '@deepseek-ai/dsh-host-webserver-node'",
     '  config:',
     "    host: '127.0.0.1'",
     '    port: 0',
@@ -56,7 +56,7 @@ async function loadComposition(): Promise<Context> {
   await context.plugin(Loader)
   context.loader.builtins.include = Include
   const modules = new Map<string, unknown>([
-    ['@deepseek-ai/dsh-host-webserver', HttpServer],
+    ['@deepseek-ai/dsh-host-webserver-node', NodeWebServer],
     ['@deepseek-ai/dsh-host-frontend-static', FrontendStatic],
   ])
   context.loader.internal = {
@@ -92,7 +92,7 @@ describe('real Loader composition', () => {
       .map(entry => entry.options.name)
     expect(unloaded).toEqual([])
     const server = loaded.webServer
-    const port = server.port
+    const port = server.address!.port
 
     // Real assets with their MIME types; a live rebuild is served on the next read.
     expect(await request(port, '/app.js')).toMatchObject({ status: 200, type: 'text/javascript; charset=utf-8', body: 'export {}' })
@@ -161,7 +161,17 @@ describe('real Loader composition', () => {
     // malformed filesystem target still reaches the webserver's 400 guard.
     expect((await request(port, '/..%2f..%2fetc%2fpasswd')).status).toBe(403)
     expect((await request(port, '/app.js', { method: 'POST' })).status).toBe(405)
+    expect((await request(port, '/app.js', { method: 'PUT' })).status).toBe(405)
     expect((await request(port, '/bad%00path')).status).toBe(400)
+
+    // An unreadable asset is not a miss: the filesystem failure propagates
+    // to the webserver's per-request failure handling instead of a 404 that
+    // would hide a broken deployment. (Root ignores file modes.)
+    if (process.getuid?.() !== 0) {
+      await writeFile(join(root!, 'dist', 'sealed.js'), 'sealed')
+      await chmod(join(root!, 'dist', 'sealed.js'), 0o000)
+      expect((await request(port, '/sealed.js')).status).toBe(400)
+    }
 
     // HMR safety: disposing the frontend row releases the fallback seat (the
     // unclaimed webserver answers 404) and the seat is claimable again.
@@ -169,6 +179,6 @@ describe('real Loader composition', () => {
     expect(frontendEntry).toBeDefined()
     await frontendEntry!.fiber?.dispose()
     expect((await request(port, '/no/such/route')).status).toBe(404)
-    expect(() => server.registerFallback(() => {})).not.toThrow()
+    expect(() => server.registerFallback(() => new Response(null, { status: 404 }))).not.toThrow()
   })
 })

@@ -11,7 +11,6 @@
  * @module @deepseek-ai/dsh-host-frontend-static
  */
 
-import type { ServerResponse } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import { dirname, extname, join, normalize, resolve, sep } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
@@ -55,45 +54,40 @@ const STATIC_MISS_CODES: ReadonlySet<string | undefined> = new Set([
 /**
  * Serve one GET/HEAD static request from the dist root.
  * @param pathname - decoded URL pathname of the request.
- * @param res - the node:http response to write.
  * @param distRoot - absolute dist root directory (resolved by the caller).
  * @param distIndex - absolute path of index.html inside distRoot.
  * @param renderIndex - produces the index.html body (structured injection
  * rendering) for the dist root and configured index path.
+ * @returns the file response, 403 for traversal, or 404 for an absent or non-file target.
  */
 export async function serveStatic(
-  pathname: string, res: ServerResponse, distRoot: string, distIndex: string,
+  pathname: string, distRoot: string, distIndex: string,
   renderIndex: () => Promise<string>,
-): Promise<void> {
+): Promise<Response> {
   const target = resolve(normalize(join(distRoot, pathname)))
   // Traversal rejection: the target must be distRoot itself (`/`) or stay under
   // it. `sep`, not '/': resolve() emits backslash paths on Windows, where a '/'
   // suffix would reject every legitimate subpath as traversal.
   if (target !== distRoot && !target.startsWith(distRoot + sep)) {
-    res.writeHead(403)
-    res.end()
-    return
+    return new Response(null, { status: 403 })
   }
-  let body: string | Buffer
+  let body: string | Uint8Array<ArrayBuffer>
   let type: string
   try {
     if (target === distRoot || target === distIndex) {
       body = await renderIndex()
       type = HTML_MIME
     } else {
-      body = await readFile(target)
+      body = new Uint8Array(await readFile(target))
       type = MIME[extname(target)] ?? 'application/octet-stream'
     }
   } catch (error) {
     // Only absent or non-file targets are 404; other filesystem failures reach
     // the webserver's request-failure handling.
     if (!STATIC_MISS_CODES.has((error as NodeJS.ErrnoException).code)) throw error
-    res.writeHead(404)
-    res.end()
-    return
+    return new Response(null, { status: 404 })
   }
-  res.writeHead(200, { 'content-type': type })
-  res.end(body)
+  return new Response(body, { status: 200, headers: { 'content-type': type } })
 }
 
 /**
@@ -106,16 +100,13 @@ export function apply(ctx: Context, config: Config): void {
   const distRoot = dirname(distIndex)
   const renderIndex = async (): Promise<string> =>
     ctx.webServer.renderIndex(await readFile(distIndex, 'utf8'))
-  ctx.effect(() => ctx.webServer.registerFallback(async (req, res) => {
+  ctx.effect(() => ctx.webServer.registerFallback((request) => {
     // Non-GET/HEAD without a matching named route is 405 (fallback-only
     // semantics: named routes own their method handling).
-    if (req.method !== 'GET' && req.method !== 'HEAD') {
-      res.writeHead(405)
-      res.end()
-      return
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      return new Response(null, { status: 405 })
     }
-    /* v8 ignore next -- node:http always sets url on server requests */
-    const rawPath = new URL(req.url ?? '/', 'http://x').pathname
-    await serveStatic(decodeURIComponent(rawPath), res, distRoot, distIndex, renderIndex)
+    const rawPath = new URL(request.url).pathname
+    return serveStatic(decodeURIComponent(rawPath), distRoot, distIndex, renderIndex)
   }), 'frontend-static: fallback seat')
 }

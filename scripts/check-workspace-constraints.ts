@@ -61,6 +61,9 @@ const appPackageFiles: Readonly<Record<string, readonly string[]>> = {
   // The Web build emits sourcemaps for browser debugging; publishing them is
   // what the payload policy forbids, so the bundle ships without them.
   '@deepseek-ai/dsh-web-frontend': ['dist', '!dist/**/*.map'],
+  // The Cloudflare app publishes its prebuilt Worker and the wrangler
+  // configuration that deploys it; the sourcemap stays local.
+  '@deepseek-ai/dsh-cf-web': ['dist/worker.js', 'wrangler.jsonc'],
 }
 
 /** The subset of package.json fields this constraint check cares about. */

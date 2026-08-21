@@ -53,6 +53,7 @@
     { "path": "./packages/client/ui-attachment" },
     { "path": "./packages/client/ui-primitives" },
     { "path": "./packages/client/modules" },
+    { "path": "./packages/client/bundle-source-node" },
     { "path": "./packages/client/hmr" },
     { "path": "./packages/client/connection/tsconfig.client.json" },
     { "path": "./packages/typert/registry" },

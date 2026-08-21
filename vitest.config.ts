@@ -210,7 +210,6 @@ export default defineConfig({
         'packages/client/ui-slots/src/*',
         'packages/client/ui-layout/src/*',
         'packages/client/web/src/*',
-        'packages/host/webserver/src/*',
         'packages/client/modules/src/client/system.ts',
         'packages/client/hmr/src/client/index.ts',
         // Web config-tree boot round: the new host-side web-transport halves
@@ -223,7 +222,6 @@ export default defineConfig({
         'packages/client/hmr/src/index.ts',
         'packages/client/hmr/src/invariant.ts',
         'packages/client/connection/src/index.ts',
-        'packages/client/connection/src/http-bridge.ts',
         // This assembly imports generated Host-for-Client code that exists
         // only in lib; the post-build built-bin smoke executes both entries.
         'packages/api/remotes/src/index.ts',

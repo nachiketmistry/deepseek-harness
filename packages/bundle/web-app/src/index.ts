@@ -22,7 +22,7 @@ import * as FrontendStatic from '@deepseek-ai/dsh-host-frontend-static'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import { scrubbedParentEnv } from '@deepseek-ai/dsh-subprocess'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
-import type {} from '@deepseek-ai/dsh-host-webserver'
+import type { WebServerAddress } from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-shell-env'
 
@@ -154,9 +154,21 @@ function webSurfacePrompt(webUrl: string): string {
 
 /** Resolve the canonical loopback URL from the active Web server. */
 function localWebUrl(ctx: Context): string {
-  const port = ctx.get('webServer')?.port
+  const port = ctx.get('webServer')?.address?.port
   if (port === undefined) throw new Error('web-app: webServer service missing while resolving Web runtime')
   return `http://${LOOPBACK_HOST}:${String(port)}`
+}
+
+/**
+ * The Node carrier's bound address. This bundle is the Node web surface, so a
+ * carrier without a listener of its own is a composition error.
+ * @param ctx - plugin context carrying the webServer service.
+ * @returns the bound host and port.
+ */
+function boundAddress(ctx: Context): WebServerAddress {
+  const address = ctx.webServer.address
+  if (address === undefined) throw new Error('web-app: the webServer provider owns no listener; this bundle needs the Node carrier')
+  return address
 }
 
 /** Dist location is workspace knowledge of this bundle: resolved through the frontend package exports, not configured. */
@@ -224,7 +236,7 @@ export const internals: {
  * @param config - validated {@link Config}.
  */
 export function apply(ctx: Context, config: Config): void {
-  const runtime = resolveLanTrust(ctx.webServer.host, config.trustedHosts)
+  const runtime = resolveLanTrust(boundAddress(ctx).host, config.trustedHosts)
   // The loopback URL belongs to this host. Under SSH, the operator reaches it
   // through a local forwarding address that this process cannot derive.
   const handoffBrowser = config.openBrowser && !launchedThroughSsh(ctx)
@@ -260,7 +272,7 @@ export function apply(ctx: Context, config: Config): void {
       const webUrl = localWebUrl(ctx)
       // Reuse the exact LAN snapshot provided to the /api trust fence.
       const lanCandidate = runtime.lanAddresses[0]
-      const port = ctx.webServer.port
+      const port = boundAddress(ctx).port
       if (config.printUrl) {
         console.log(`dsh web: ${webUrl}${lanCandidate === undefined ? '' : ` (LAN: http://${lanCandidate}:${String(port)})`}`)
       }

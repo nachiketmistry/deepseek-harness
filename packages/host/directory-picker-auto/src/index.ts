@@ -60,8 +60,12 @@ export const SURFACE_PACKAGES: Record<DirectoryPickerBackendKind, string> = {
  * @param ctx - cordis context carrying the injected `webServer` and `loader`.
  */
 export async function apply(ctx: Context): Promise<void> {
+  const address = ctx.webServer.address
+  if (address === undefined) {
+    throw new Error('directory-picker-auto: the webServer provider owns no listener; a native chooser needs the Node carrier')
+  }
   const backend = resolveDirectoryPickerBackend({
-    bindHost: ctx.webServer.host,
+    bindHost: address.host,
     platform: process.platform,
     env: process.env,
     linuxChooser: hasLinuxChooserBinary(process.env.PATH, canExecute),

@@ -280,7 +280,7 @@ export interface LaunchOptions {
    * product ever boots in. The patch lands after the default, so it wins.
    */
   agentPresets?: {
-    /** Roots to discover, in precedence order; the shipped directory is `system`. */
+    /** Roots the filesystem source discovers, in precedence order; the shipped directory is `system`. */
     roots: { path: string; trust: 'system' | 'user' }[]
     /** The preset a session that names none is composed from. */
     default: string
@@ -405,7 +405,7 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
     ...basePatches,
     ...surfacePatches,
     ...extraOverlayPatches,
-    // The roster's `roots` is an assembly fact AppCLIEntry resolves and patches
+    // The source's `roots` is an assembly fact AppCLIEntry resolves and patches
     // in, exactly like `distIndex` on the webserver row — the shipped preset
     // directory sits beside the composition that names it, and no config author
     // chooses it. This lane boots the shipped tree WITHOUT AppCLIEntry, so it
@@ -414,13 +414,13 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
     // Only the shipped root: a developer's own `~/.dsh/.agent-presets` must not be
     // able to change a golden.
     {
-      id: 'agent-presets',
+      id: 'agent-preset-source',
       config: {
-        default: 'standard',
         roots: [{ path: SHIPPED_PRESET_DIR, trust: 'system' }],
         includeUserRoot: false,
       },
     },
+    { id: 'agent-presets', config: { default: 'standard' } },
     { id: 'session-persistence-jsonl', config: { root: persistenceRoot } },
     // Content search is enabled here although the shipped bundles default it
     // off (`openAt: never`, pinned by apps/cli/tests/lazy-search-startup):
@@ -493,7 +493,10 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
       ? []
       // Never the derived harness-home root: a developer's own presets must not
       // be able to change a golden, whatever roots a scenario asks for.
-      : [{ id: 'agent-presets', config: { ...options.agentPresets, includeUserRoot: false } }],
+      : [
+        { id: 'agent-preset-source', config: { roots: options.agentPresets.roots, includeUserRoot: false } },
+        { id: 'agent-presets', config: { default: options.agentPresets.default } },
+      ],
     ...options.toolsMode === undefined ? [] : [{ id: 'tools', config: { mode: options.toolsMode } }],
     // The shipped Web bundle already owns both runners and the Cordis UI. This
     // scenario adds only the model-facing tools that exercise those services.
@@ -563,11 +566,11 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
         op: 'set', path: [WELCOME_NOTICE_ACK_FIELD], value: WELCOME_NOTICE_VERSION,
       }])
     }
-    const boundPort = ctx.get('webServer')?.port
-    if (boundPort === undefined) {
+    const boundAddress = ctx.get('webServer')?.address
+    if (boundAddress === undefined) {
       throw new Error('web e2e scaffold: webServer service missing after settled boot')
     }
-    port = boundPort
+    port = boundAddress.port
 
     // Fill the open llm seam on the settled root ctx. Ordinary keyless modes
     // disable llm-deepseek; the first-run lane keeps it mounted but has no

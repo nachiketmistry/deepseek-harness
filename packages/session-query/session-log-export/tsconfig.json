@@ -9,6 +9,8 @@
   ],
   "references": [
     { "path": "../../../vendor/cordis" },
+    { "path": "../../../vendor/include" },
+    { "path": "../../../vendor/loader" },
     { "path": "../../interaction/commands" },
     { "path": "../../client/locale" },
     { "path": "../../client/runtime" },

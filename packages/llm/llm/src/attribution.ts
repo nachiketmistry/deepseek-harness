@@ -7,13 +7,14 @@
  * @module @deepseek-ai/dsh-llm/attribution
  */
 
-import { createRequire } from 'node:module'
-
 // The package's own manifest is the single source of the version so the
-// User-Agent cannot drift from what is published (`./package.json` is an
-// export of this package; the relative path resolves from both `src/` and
-// the bundled `lib/`).
-const { version } = createRequire(import.meta.url)('../package.json') as { version: string }
+// User-Agent cannot drift from what is published. Imported through the
+// package's own `./package.json` export as JSON so the bundle carries the
+// value: a runtime `createRequire(import.meta.url)` read needs a file URL,
+// which a non-Node host (workerd) does not supply.
+import packageJson from '@deepseek-ai/dsh-llm/package.json' with { type: 'json' }
+
+const { version } = packageJson as { version: string }
 
 /**
  * Static public application identity sent to LLM providers.

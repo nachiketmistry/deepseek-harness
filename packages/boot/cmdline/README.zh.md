@@ -39,7 +39,7 @@ export function apply(ctx: Context): void {
 
 ```yaml
 - id: webserver
-  name: '@deepseek-ai/dsh-host-webserver'
+  name: '@deepseek-ai/dsh-host-webserver-node'
   inject: [webStartup]
   config:
     host: !!js ctx.webStartup.host ?? '127.0.0.1'

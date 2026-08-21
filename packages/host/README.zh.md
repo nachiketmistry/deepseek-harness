@@ -2,12 +2,13 @@
 
 [English](README.md) | 中文
 
-dsh Web GUI 的宿主侧：所有客户端形态共享的 API 网关，以及承载它的普通 HTTP 服务器。浏览器侧位于 [`client/`](../client/README.zh.md)；组合应用是 [`apps/cli`](../../apps/cli/README.zh.md)，它启动 [`dsh-base` 组合包](../bundle/base/cordis.patch.yml) 来提供 [`apps/web`](../../apps/web/)。这些全是**产品**包。
+dsh Web GUI 的宿主侧：所有客户端形态共享的 API 网关，以及承载它的 web 载体。浏览器侧位于 [`client/`](../client/README.zh.md)；组合应用是 [`apps/cli`](../../apps/cli/README.zh.md)，它启动 [`dsh-base` 组合包](../bundle/base/cordis.patch.yml) 来提供 [`apps/web`](../../apps/web/)。这些全是**产品**包。
 
 | 包 | 职责 | ctx key |
 |---|---|---|
 | [`apiproxy/`](apiproxy/README.zh.md) | 共享宿主 API 网关和协议约定 | `ctx.apiProxy` |
-| [`webserver/`](webserver/README.zh.md) | HTTP 路由载体 | `ctx.webServer` |
+| [`webserver/`](webserver/README.zh.md) | web 载体 Service Definition：按 Fetch 分发的 HTTP 与 WebSocket 路由 | `ctx.webServer` |
+| [`webserver-node/`](webserver-node/README.zh.md) | 基于 `node:http` 与 `ws` 的 Node 载体 provider | 注册 `ctx.webServer` |
 | [`frontend-static/`](frontend-static/README.zh.md) | 占据 webserver 回退席位的 SPA dist 服务器 | 消费 `ctx.webServer` |
 | [`directory-picker/`](directory-picker/README.zh.md) | 工作区目录选择 seam | `ctx.directoryPicker` |
 | [`directory-picker-native/`](directory-picker-native/README.zh.md) | 原生目录选择器后端和浏览器交互 | 注册 `ctx.directoryPicker` |

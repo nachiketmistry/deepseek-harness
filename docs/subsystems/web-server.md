@@ -2,7 +2,7 @@
 
 English | [中文](web-server.zh.md)
 
-[dsh-host-webserver](../../packages/host/webserver) is the browser HTTP carrier for the GUI host: a single `node:http` plugin providing `ctx.webServer`, a named-route registry, index.html transform callbacks, and one fallback handler that a plugin may claim. It is not part of the agent loop and not a capability seam; it knows no harness concepts, and another plugin registers every feature route, including the `/api` bridge, plugin bundles, and the HMR event stream ([layering note](../../.agents/notes/implemented/architecture/2026-07-19-gui-layering-and-rpc-protocol.md)). It serves browsers only: Electron loads the built files over `file://` and sends fetch requests through an IPC bridge instead of this server.
+[dsh-host-webserver](../../packages/host/webserver) is the web carrier Service Definition for the GUI host: the abstract `WebServer` providing `ctx.webServer`, a named-route registry dispatched over the Fetch standard, a WebSocket route registry, index.html injection rows and transform callbacks, and one fallback handler that a plugin may claim. A Service Provider subclasses it and owns the listener: [dsh-host-webserver-node](../../packages/host/webserver-node) binds `node:http` and accepts WebSockets through `ws`; a platform provider forwards its own fetch entry. The carrier is not part of the agent loop and not a capability seam in the tool sense; it knows no harness concepts, and another plugin registers every feature route, including the `/api` route, plugin bundles, and the HMR event stream ([layering note](../../.agents/notes/implemented/architecture/2026-07-19-gui-layering-and-rpc-protocol.md)). It serves browsers only: Electron loads the built files over `file://` and sends fetch requests through an IPC bridge instead of this server.
 
 Source: [`packages/host/webserver/src/index.ts`](../../packages/host/webserver/src/index.ts)
 
@@ -19,17 +19,45 @@ interface WebRoute {
   kind: WebRouteKind
   /** Absolute pathname, no trailing slash. */
   path: string
-  /** Owns the full response lifecycle (may hold the response open, e.g. SSE). */
-  handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>
+  /** Produces the complete or streaming response. */
+  handler: WebRequestHandler
 }
 ```
 
-Match order is fixed: exact table first, then longest matching prefix, then the registered fallback. Registration order carries no request-facing semantics — named routes are composed to be disjoint, and the fallback seat answers anything no named route claims; one owner only, a second registration throws. The shipped Web composition claims the seat with [`dsh-host-frontend-static`](../../packages/host/frontend-static/src/index.ts), the SPA dist server with locked semantics: non-GET/HEAD is 405, traversal outside the dist root is 403, a readable index renders at the dist root and configured index path, existing files are served directly, absent or non-file targets are empty 404 responses, and unknown extensions ship as octet-stream.
+Match order is fixed: exact table first, then longest matching prefix, then the registered fallback, then 404. Registration order carries no request-facing semantics — named routes are composed to be disjoint, and the fallback seat answers anything no named route claims; one owner only, a second registration throws. The shipped Web composition claims the seat with [`dsh-host-frontend-static`](../../packages/host/frontend-static/src/index.ts), the SPA dist server with locked semantics: non-GET/HEAD is 405, traversal outside the dist root is 403, a readable index renders at the dist root and configured index path, existing files are served directly, absent or non-file targets are empty 404 responses, and unknown extensions ship as octet-stream.
 
-## Config
+## WebSocket routes
 
 ```ts type-equiv
-/** Gateway config: the listen address. */
+/** One exact-path WebSocket route registration. */
+interface WebSocketRoute {
+  /** Absolute pathname, no trailing slash. */
+  path: string
+  /**
+   * Decide before the handshake. A returned response refuses the upgrade and
+   * is delivered as the plain HTTP answer; `undefined` accepts it.
+   * @param request - the upgrade request.
+   */
+  authorize?: (request: Request) => Response | undefined
+  /**
+   * Drive one accepted socket until it closes. A provider that recovers
+   * sockets after its own restart (hibernation) calls this again with the
+   * recovered socket and the request it was accepted for.
+   * @param request - the upgrade request.
+   * @param socket - the accepted server-side socket.
+   */
+  open: (request: Request, socket: WebServerSocket) => void | Promise<void>
+}
+```
+
+`WebServerSocket` is the WHATWG `WebSocket` subset every provider can offer (`readyState`, `send`, `close`, `addEventListener` for `message`, `close`, and `error`); Node's `ws` socket and a platform server socket both satisfy it structurally, so the connection plugin's downlink pumps frames without knowing the provider.
+
+## Provider config
+
+The Node provider listens on one address:
+
+```ts type-equiv
+/** Provider config: the listen address. */
 interface Config {
   /** Listen host; the two supported values are loopback and all-interfaces. */
   host: '127.0.0.1' | '0.0.0.0'
@@ -42,9 +70,9 @@ interface Config {
 
 ## The service
 
-`WebServer` (`ctx.webServer`) listens immediately on activation; a listen failure (EADDRINUSE…) rejects initialization, and the boot process reports the failed fiber. `register(route)` adds one named route and returns its disposer; a duplicate `(kind, path)` throws because route patterns are a composition-level contract and a collision is a misconfiguration. `collectIndexInjections()` gathers structured `IndexInjection` rows over one `webserver/index-inject` emit, and `renderIndex(html)` renders them into successful root and configured index responses before applying the raw `tapIndex(transform)` escape-hatch transforms in registration order; [dsh-client-modules](../../packages/client/modules) answers the event with the boot manifest rows. `port` reads the listening port, including the port assigned by the OS when `config.port` is 0.
+`WebServer` (`ctx.webServer`) dispatches through `fetch(request)`: the Node provider listens immediately on activation, and a listen failure (EADDRINUSE…) rejects initialization so the boot process reports the failed fiber. `register(route)` adds one named route and returns its disposer; a duplicate `(kind, path)` throws because route patterns are a composition-level contract and a collision is a misconfiguration. `collectIndexInjections()` gathers structured `IndexInjection` rows over one `webserver/index-inject` emit, and `renderIndex(html)` renders them into successful root and configured index responses before applying the raw `tapIndex(transform)` escape-hatch transforms in registration order; [dsh-client-modules](../../packages/client/modules) answers the event with the boot manifest rows. `address` reads the provider's bound host and port, including the port assigned by the OS when the Node config's `port` is 0, and is `undefined` for a platform-driven provider.
 
-A request whose handling throws (a malformed %-escape hitting `decodeURIComponent`, a client dropping mid-body) is logged as a warning and answered 400 — or the socket destroyed when headers are already out — never a process exit. Disposal pairs `close()` with `closeAllConnections()` because a handler may hold its response open (SSE) and such connections never end on their own; without the force-close, teardown would hang. The package never prints: the URL line belongs to the shell. Per-package operational detail, including the dev-mode bundle watch pipeline, stays in the [README](../../packages/host/webserver/README.md).
+The request URL's authority is what the client addressed, and `request.signal` aborts when the client goes away, so a streaming handler (SSE) ends its body on abort. A request whose handling throws (a malformed %-escape hitting `decodeURIComponent`, a client dropping mid-body) is logged by the Node provider as a warning and answered 400 — or the socket destroyed when headers are already out — never a process exit. Node disposal pairs `close()` with `closeAllConnections()` and terminates accepted WebSockets because a handler may hold its response open and such connections never end on their own; without the force-close, teardown would hang. The packages never print: the URL line belongs to the shell. Per-package operational detail stays in the [Service Definition README](../../packages/host/webserver/README.md) and the [Node provider README](../../packages/host/webserver-node/README.md).
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 

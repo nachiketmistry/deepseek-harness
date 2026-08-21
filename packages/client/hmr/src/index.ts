@@ -9,7 +9,6 @@
  * chain stays idle.
  */
 import { statSync } from 'node:fs'
-import type { ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 // Empty type imports carry the clientModuleHost/webServer Context merges.
@@ -146,45 +145,67 @@ export function apply(ctx: Context, config: Config): void {
   }, 'client-hmr: bundle watches')
 
   // --- /plugins/events SSE channel ----------------------------------------
-  const connections = new Set<ServerResponse>()
+  const encoder = new TextEncoder()
+  const connections = new Set<ReadableStreamDefaultController<Uint8Array>>()
 
-  const connect = (res: ServerResponse): void => {
-    res.writeHead(200, {
-      'content-type': 'text/event-stream',
-      'cache-control': 'no-cache',
-      'connection': 'keep-alive',
+  const connect = (request: Request): Response => {
+    // Assigned by start(), which runs synchronously inside the constructor below.
+    let release: () => void
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        release = () => { connections.delete(controller) }
+        // Comment line on open so clients/proxies see a live channel even when
+        // no rebuild ever happens; EventSource frame parsing skips it naturally.
+        controller.enqueue(encoder.encode(': connected\n\n'))
+        controller.enqueue(encoder.encode(sseData({ type: 'graph', graph: ctx.clientModules.graph() })))
+        connections.add(controller)
+        request.signal.addEventListener('abort', () => {
+          release()
+          try {
+            controller.close()
+          } catch {
+            // Closed by the teardown below first; nothing remains to release.
+          }
+        }, { once: true })
+      },
+      cancel() {
+        // The carrier stopped reading without aborting the request (a platform
+        // entry cancelling the body): a cancelled stream rejects enqueue, so
+        // the row leaves the broadcast set here.
+        release()
+      },
     })
-    // Comment line on open so clients/proxies see a live channel even when
-    // no rebuild ever happens; EventSource frame parsing skips it naturally.
-    res.write(': connected\n\n')
-    res.write(sseData({ type: 'graph', graph: ctx.clientModules.graph() }))
-    connections.add(res)
-    res.on('close', () => { connections.delete(res) })
+    return new Response(stream, {
+      status: 200,
+      headers: {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+        'connection': 'keep-alive',
+      },
+    })
   }
 
   ctx.effect(() => {
     const disposeRoute = ctx.webServer.register({
       kind: 'exact',
       path: EVENTS_ENDPOINT,
-      handler: (req, res) => {
+      handler: (request) => {
         // Named routes match ahead of the carrier's method gate; keep the old
         // global 405 semantics for non-GET hits on this endpoint.
-        if (req.method !== 'GET' && req.method !== 'HEAD') {
-          res.writeHead(405)
-          res.end()
-          return
+        if (request.method !== 'GET' && request.method !== 'HEAD') {
+          return new Response(null, { status: 405 })
         }
-        connect(res)
+        return connect(request)
       },
     })
     const unsubscribe = ctx.clientModules.onRebuilt((id, rev) => {
-      const line = sseData({ type: 'rebuilt', id, rev })
-      for (const res of connections) res.write(line)
+      const line = encoder.encode(sseData({ type: 'rebuilt', id, rev }))
+      for (const controller of connections) controller.enqueue(line)
     })
     return () => {
       unsubscribe()
       disposeRoute()
-      for (const res of connections) res.destroy()
+      for (const controller of connections) controller.close()
       connections.clear()
     }
   }, 'client-hmr: /plugins/events channel')

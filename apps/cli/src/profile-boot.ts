@@ -154,13 +154,14 @@ function composeProfile(
   const composedOverlays = [...overlays]
   // The SHIPPED root is the part of the roster only this app can resolve: it
   // sits beside this app's own config, in both the source and built layouts.
-  // The writable root the roster appends is `dsh-agent-presets`' own, so a
-  // launcher that never reaches this patch still finds a person's presets.
-  if (rows.has('agent-presets')) {
+  // It lands on the filesystem source row; the writable root that source
+  // appends is its own, so a launcher that never reaches this patch still
+  // finds a person's presets.
+  if (rows.has('agent-preset-source')) {
     composedOverlays.push({
-      id: 'agent-presets',
+      id: 'agent-preset-source',
       config: {
-        ...(rows.get('agent-presets')?.config ?? {}) as Record<string, unknown>,
+        ...(rows.get('agent-preset-source')?.config ?? {}) as Record<string, unknown>,
         roots: [{ path: SHIPPED_PRESET_ROOT, trust: 'system' }],
       },
     })

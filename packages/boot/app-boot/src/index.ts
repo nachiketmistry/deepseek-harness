@@ -48,6 +48,13 @@ export {
   type ProfileLayer,
   type ProfileManifest,
 } from './profile.ts'
+export {
+  bootEntries,
+  tableModuleLoader,
+  type BootEntriesOptions,
+  type ModuleTable,
+  type TableModuleLoader,
+} from './compose.ts'
 
 /**
  * Resolve the config to boot. Replay swaps a `cordis.yml` basename for

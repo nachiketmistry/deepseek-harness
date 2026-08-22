@@ -35,14 +35,18 @@ export function compositionPackages() {
  *   substitute the Worker entry mounts ahead of the composition instead (`src/worker.ts`),
  *   which is where a provider needing a Durable Object handle or a build-time table lives.
  *   `presets` says what a preset row of the same package does, and is required only once a
- *   preset actually mounts one.
+ *   preset actually mounts one. `reduced` and `degraded` say where the substitute is not a
+ *   like-for-like stand-in, keyed by substitute package: `reduced` entries are cross-checked
+ *   against a scan of the provider's source (fidelity.mjs) and fail when they disagree in
+ *   either direction, while `degraded` states a platform limit no scan can see.
  * - `not-applicable` — the row contributes nothing to this deployment (dev-only tooling,
  *   another platform, an optional catalog). No capability is lost.
  * - `gap` — the CF deployment does not have the capability. `orphans` names the rows that
  *   stay mounted and depend on it; parity.mjs verifies each is still in the composition, so
  *   the claim cannot rot into a stale note.
  *
- * @typedef {{ kind: 'replaced', reason: string, by: (deployment: Deployment) => object[], entry?: string, presets?: 'replace' | 'drop' }} ReplacedDisposition
+ * @typedef {{ member: string, cost: string }} ReducedOperation
+ * @typedef {{ kind: 'replaced', reason: string, by: (deployment: Deployment) => object[], entry?: string, presets?: 'replace' | 'drop', reduced?: Record<string, ReducedOperation[]>, degraded?: Record<string, string> }} ReplacedDisposition
  * @typedef {{ kind: 'not-applicable', reason: string }} NotApplicableDisposition
  * @typedef {{ kind: 'gap', reason: string, capability: string, impact: string, orphans: string[], status: 'open' | 'out-of-scope', tracking: string }} GapDisposition
  * @typedef {ReplacedDisposition | NotApplicableDisposition | GapDisposition} CfDisposition
@@ -65,6 +69,11 @@ export const CF_ROW_DISPOSITIONS = new Map([
     // carrier mounts against the platform handle before the composition boots.
     by: () => [],
     entry: '@deepseek-ai/dsh-webserver-cf',
+    reduced: {
+      '@deepseek-ai/dsh-webserver-cf': [
+        { member: 'address', cost: 'No bound host and port: a Worker does not listen. The only consumer in the web composition is the Node web glue, which `web-cf` replaces with the deployment\'s public URL, so nothing reads it here.' },
+      ],
+    },
   }],
   ['@deepseek-ai/dsh-settings-file', {
     kind: 'replaced',
@@ -80,6 +89,11 @@ export const CF_ROW_DISPOSITIONS = new Map([
     kind: 'replaced',
     reason: 'disk JSONL',
     by: () => [{ id: 'session-persistence-do', name: '@deepseek-ai/dsh-session-persistence-do' }],
+    reduced: {
+      '@deepseek-ai/dsh-session-persistence-do': [
+        { member: 'locate', cost: 'One Durable Object database holds every session, so no session has an independent artifact to point at. The api-proxy and `shell-env` expose no session-log path.' },
+      ],
+    },
   }],
   ['@deepseek-ai/dsh-storage-json', {
     kind: 'replaced',
@@ -103,11 +117,17 @@ export const CF_ROW_DISPOSITIONS = new Map([
       { id: 'cf-sandbox', name: '@deepseek-ai/dsh-cf-sandbox', config: { workspaceRoot: deployment.workspaceRoot, gitTokenSecret: 'GH_TOKEN' } },
       { id: 'subprocess-cf-sandbox', name: '@deepseek-ai/dsh-subprocess-cf-sandbox' },
     ],
+    degraded: {
+      '@deepseek-ai/dsh-subprocess-cf-sandbox': 'Two spawn options throw rather than run: `stdin: \'pipe\'` (the Sandbox SDK exposes no process stdin) and `\'inherit\'` output (a Worker has no parent descriptors). A terminal delivers only SIGINT, to the foreground group.',
+    },
   }],
   ['@deepseek-ai/dsh-sandbox-local', {
     kind: 'replaced',
     reason: 'OS sandbox launchers',
     by: () => [{ id: 'sandbox-passthrough', name: '@deepseek-ai/dsh-sandbox-passthrough' }],
+    degraded: {
+      '@deepseek-ai/dsh-sandbox-passthrough': 'Reports `partial` enforcement through the seam\'s own vocabulary: the container is the whole isolation boundary, and the per-call policy — `read-only` versus `workspace-write`, the workspace root, the session identity — is not enforced inside it. A `read-only` call still permits writes.',
+    },
   }],
   ['@deepseek-ai/dsh-fs-sandbox', {
     kind: 'replaced',
@@ -135,6 +155,11 @@ export const CF_ROW_DISPOSITIONS = new Map([
     reason: 'disk preset roots + chokidar',
     by: () => [],
     entry: '@deepseek-ai/dsh-agent-presets-static',
+    reduced: {
+      '@deepseek-ai/dsh-agent-presets-static': [
+        { member: 'authorable', cost: 'The presets are baked into the host artifact at build time and there is nowhere for a locally authored one to go, so the deployment is read-only for presets: the GUI disables duplicating and editing a preset, and a user cannot add one.' },
+      ],
+    },
   }],
   ['@deepseek-ai/dsh-web-app', {
     kind: 'replaced',

@@ -26,6 +26,7 @@
     "@cloudflare/workers-types": "^5.20260821.1",
     "esbuild": "^0.28.2",
     "js-yaml": "^4.2.0",
+    "typescript": "^6.0.3",
     "vitest": "^4.1.8",
     "wrangler": "^4.125.0"
   },

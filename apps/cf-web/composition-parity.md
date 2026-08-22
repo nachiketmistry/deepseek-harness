@@ -12,7 +12,7 @@ What it shows: every row of the web composition the Cloudflare build does not mo
 | distinct packages (host rows and presets) | 136 | 124 |
 | agent presets | 4 | 2 |
 
-5 capability gaps, 2 of them open. 14 host rows are replaced by a Cloudflare provider and 7 do not apply to this deployment.
+5 capability gaps, 2 of them open. 14 host rows are replaced by a Cloudflare provider and 7 do not apply to this deployment. Of the 16 substitute providers, 15 have no test suite and 5 are not like-for-like stand-ins.
 
 ## Capability gaps
 
@@ -25,6 +25,31 @@ A gap is a capability the web app has and this deployment does not. `still mount
 | **workflow** | out of scope | `dsh-workflow-worker-thread`<br>`dsh-tool-workflow`<br>`dsh-tool-ralph` | `dsh-client-ui-workflow-run` | No workflow engine is mounted, while the host still mounts the workflow run UI. No preset offers the workflow tool. No preset offers the ralph loop tool. | [`2026-08-21-cloudflare-web-host.md`](../../.agents/notes/proposed/architecture/2026-08-21-cloudflare-web-host.md) |
 | **self-modification** | out of scope | `dsh-cordis-host-runner`<br>preset `cordis` | — | The agent cannot mount, inspect, or modify its own plugin tree at runtime. The `cordis` preset cannot ship: it mounts `cordis-host-runner` (node:vm). | [`2026-08-21-cloudflare-web-host.md`](../../.agents/notes/proposed/architecture/2026-08-21-cloudflare-web-host.md) |
 | **minimal-preset** | open | preset `minimal` | — | The `minimal` preset cannot ship: it shadows the filesystem with the bare local-disk provider, which the Worker has no disk for. | [`2026-08-21-cloudflare-web-host.md`](../../.agents/notes/proposed/architecture/2026-08-21-cloudflare-web-host.md) |
+
+## Provider fidelity
+
+A replacement claims a Cloudflare provider stands in for a Node one. This section is the second claim: that the provider does the work. `reduced` operations are found by scanning the provider's source for a method body that is one unconditional `throw`, an empty body, or a single `return` of an absent value, and each must be declared in `scripts/composition.mjs` — an undeclared one fails this generator. `degraded` is a platform limit no scan can see and is declared, not derived; read it as a claim under review, not a verified one.
+
+`tests` counts the provider's own spec files. 15 of 16 substitutes have none, and `pnpm run test:coverage` — per-file 100% over `packages/*/*/src`, with no exemption for `packages/cf` — rejects every one of their source files today. Until those suites exist, "replaced" in the table above means mounted and bundled, not exercised.
+
+| provider | replaces | tests | reduced or degraded |
+|---|---|---|---|
+| `dsh-webserver-cf` | `dsh-host-webserver-node` | **none** | `address` — No bound host and port: a Worker does not listen. The only consumer in the web composition is the Node web glue, which `web-cf` replaces with the deployment's public URL, so nothing reads it here. |
+| `dsh-settings-do` | `dsh-settings-file` | **none** | — |
+| `dsh-credentials-secrets` | `dsh-credentials-local` | **none** | — |
+| `dsh-session-persistence-do` | `dsh-session-persistence-jsonl` | **none** | `locate` — One Durable Object database holds every session, so no session has an independent artifact to point at. The api-proxy and `shell-env` expose no session-log path. |
+| `dsh-storage-do` | `dsh-storage-json` | **none** | — |
+| `dsh-attachment-r2` | `dsh-attachment-local` | **none** | — |
+| `dsh-spill-r2` | `dsh-spill-local` | **none** | — |
+| `dsh-cf-sandbox` | `dsh-subprocess-local` | **none** | — |
+| `dsh-subprocess-cf-sandbox` | `dsh-subprocess-local` | **none** | declared: Two spawn options throw rather than run: `stdin: 'pipe'` (the Sandbox SDK exposes no process stdin) and `'inherit'` output (a Worker has no parent descriptors). A terminal delivers only SIGINT, to the foreground group. |
+| `dsh-sandbox-passthrough` | `dsh-sandbox-local` | **none** | declared: Reports `partial` enforcement through the seam's own vocabulary: the container is the whole isolation boundary, and the per-call policy — `read-only` versus `workspace-write`, the workspace root, the session identity — is not enforced inside it. A `read-only` call still permits writes. |
+| `dsh-fs-cf-sandbox` | `dsh-fs-sandbox` | **none** | — |
+| `dsh-directory-picker-cf` | `dsh-host-directory-picker-auto` | **none** | — |
+| `dsh-client-ui-directory-picker-browse` | `dsh-host-directory-picker-auto` | 2 | — |
+| `dsh-client-bundle-source-static` | `dsh-client-bundle-source-node` | **none** | — |
+| `dsh-agent-presets-static` | `dsh-agent-presets-filesystem` | **none** | `authorable` — The presets are baked into the host artifact at build time and there is nowhere for a locally authored one to go, so the deployment is read-only for presets: the GUI disables duplicating and editing a preset, and a user cannot add one. |
+| `dsh-web-cf` | `dsh-web-app` | **none** | — |
 
 ## Host plane, row by row
 

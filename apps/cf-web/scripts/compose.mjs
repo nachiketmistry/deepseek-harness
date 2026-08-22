@@ -1,14 +1,19 @@
 // Compose the CF host composition at build time: the web composition's two
 // patch layers through the harness's own composer, then the CF transform —
-// drop the Node providers the CF packages replace, mount the CF providers in
-// their place, restate every `!!js` config as a literal — into a rows JSON
-// the Worker boots with `bootEntries`. Same treatment for the shipped agent
-// presets. Anything still carrying a `!!js` expression fails the build.
+// apply each row's disposition (composition.mjs), restate every `!!js` config
+// as a literal — into a rows JSON the Worker boots with `bootEntries`. Same
+// treatment for the shipped agent presets. A row with no disposition, a `!!js`
+// expression the build cannot evaluate, or a preset row whose disposition does
+// not say what a preset should do all fail the build.
+//
+// Every dropped row is recorded in a ledger rather than vanishing: parity.mjs
+// projects it into composition-parity.md, so a lost capability is a visible
+// diff instead of something noticed by poking at the deployment.
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import yaml from 'js-yaml'
 import { ROOT, workspacePackages, readPackage } from './workspace-resolver.mjs'
-import { CF_EXCLUDED_ROWS } from './composition.mjs'
+import { CF_ROW_DISPOSITIONS, CF_SKIPPED_PRESETS } from './composition.mjs'
 
 const packages = workspacePackages()
 const appBoot = await import(join(packages.get('@deepseek-ai/dsh-app-boot'), 'lib/index.js'))
@@ -18,31 +23,6 @@ const include = await import(join(packages.get('@deepseek-ai/cordis-plugin-inclu
 export function deploymentOf(env = process.env) {
   const publicHost = env.DSH_CF_PUBLIC_HOST ?? 'dsh-cf-web.shytiger.workers.dev'
   return { publicHost, publicUrl: `https://${publicHost}`, workspaceRoot: '/workspace' }
-}
-
-/** Provider rows replacing excluded rows, keyed by the excluded package name. */
-function replacements(deployment) {
-  return new Map([
-    ['@deepseek-ai/dsh-settings-file', [{ id: 'settings-do', name: '@deepseek-ai/dsh-settings-do' }]],
-    ['@deepseek-ai/dsh-credentials-local', [{ id: 'credentials-secrets', name: '@deepseek-ai/dsh-credentials-secrets' }]],
-    ['@deepseek-ai/dsh-session-persistence-jsonl', [{ id: 'session-persistence-do', name: '@deepseek-ai/dsh-session-persistence-do' }]],
-    ['@deepseek-ai/dsh-attachment-local', [{ id: 'attachment-r2', name: '@deepseek-ai/dsh-attachment-r2' }]],
-    ['@deepseek-ai/dsh-subprocess-local', [
-      { id: 'cf-sandbox', name: '@deepseek-ai/dsh-cf-sandbox', config: { workspaceRoot: deployment.workspaceRoot, gitTokenSecret: 'GH_TOKEN' } },
-      { id: 'subprocess-cf-sandbox', name: '@deepseek-ai/dsh-subprocess-cf-sandbox' },
-    ]],
-    ['@deepseek-ai/dsh-sandbox-local', [{ id: 'sandbox-passthrough', name: '@deepseek-ai/dsh-sandbox-passthrough' }]],
-    ['@deepseek-ai/dsh-spill-local', [{ id: 'spill-r2', name: '@deepseek-ai/dsh-spill-r2' }]],
-    ['@deepseek-ai/dsh-fs-sandbox', [{ id: 'fs-cf-sandbox', name: '@deepseek-ai/dsh-fs-cf-sandbox' }]],
-    ['@deepseek-ai/dsh-storage-json', [{ id: 'storage-do', name: '@deepseek-ai/dsh-storage-do' }]],
-    // The auto picker mounts a backend and its client surface as a pair; the CF
-    // backend is the container browser, so the browse surface is the client half.
-    ['@deepseek-ai/dsh-host-directory-picker-auto', [
-      { id: 'directory-picker-cf', name: '@deepseek-ai/dsh-directory-picker-cf' },
-      { id: 'ui-directory-picker-browse', name: '@deepseek-ai/dsh-client-ui-directory-picker-browse' },
-    ]],
-    ['@deepseek-ai/dsh-web-app', [{ id: 'web-cf', name: '@deepseek-ai/dsh-web-cf', config: { publicUrl: deployment.publicUrl } }]],
-  ])
 }
 
 /** Literal configs for rows whose web values are `!!js` expressions or Node-specific. */
@@ -78,16 +58,27 @@ function literalize(value, where) {
   return value
 }
 
-/** Apply the CF transform to one entry list (recursing into groups). */
-function transform(rows, deployment, { replace, override }) {
+/**
+ * Apply the CF transform to one entry list (recursing into groups).
+ * @param {object[]} rows Entry rows of one plane.
+ * @param {object} deployment The deployment the rows are composed for.
+ * @param {{ plane: string, override: Map<string, object>, ledger: object[] }} context
+ *   `plane` is `'host'` or `'preset:<id>'` and labels every ledger record; `override` replaces a
+ *   row's config by row id; `ledger` collects one record per row the transform did not keep.
+ * @returns {object[]} The transformed rows.
+ */
+function transform(rows, deployment, context) {
+  const { plane, override, ledger } = context
   const out = []
   for (const row of rows) {
     if (row.group && Array.isArray(row.config)) {
-      out.push({ ...row, config: transform(row.config, deployment, { replace, override }) })
+      out.push({ ...row, config: transform(row.config, deployment, context) })
       continue
     }
-    if (row.name !== undefined && CF_EXCLUDED_ROWS.has(row.name)) {
-      for (const replacement of replace.get(row.name) ?? []) out.push(structuredClone(replacement))
+    const disposition = row.name === undefined ? undefined : CF_ROW_DISPOSITIONS.get(row.name)
+    if (disposition !== undefined) {
+      out.push(...structuredClone(substitutes(row.name, disposition, deployment, plane)))
+      ledger.push({ plane, name: row.name, id: row.id, kind: disposition.kind })
       continue
     }
     const next = { ...row }
@@ -98,23 +89,73 @@ function transform(rows, deployment, { replace, override }) {
   return out.map((row, i) => literalize(row, row.id ?? `row#${i}`))
 }
 
-/** The host composition rows. */
-export function hostRows(deployment) {
-  const layers = ['packages/bundle/base/cordis.patch.yml', 'packages/bundle/web-app/cordis.patch.yml']
-    .map(file => appBoot.loadOverlayPatches('cf-web', join(ROOT, file)))
-  const rows = appBoot.composeEntries(layers, message => { throw new Error(`compose: ${message}`) })
-  return transform(rows, deployment, { replace: replacements(deployment), override: overrides(deployment) })
+/**
+ * The rows that stand in for one disposed row on `plane`, empty when the capability is
+ * dropped or the substitute is mounted by the Worker entry instead of by a row.
+ * @param {string} name Package name of the disposed row.
+ * @param {object} disposition Its entry in `CF_ROW_DISPOSITIONS`.
+ * @param {object} deployment The deployment the rows are composed for.
+ * @param {string} plane `'host'` or `'preset:<id>'`.
+ * @returns {object[]}
+ */
+function substitutes(name, disposition, deployment, plane) {
+  if (disposition.kind !== 'replaced') return []
+  if (plane === 'host') return disposition.by(deployment)
+  // A host-plane replacement is not automatically right inside a preset: a preset mounting the
+  // same package may want the CF provider or may want nothing, and mounting a second copy of a
+  // singleton provider throws at boot. The author decides once, in the disposition.
+  if (disposition.presets === undefined) {
+    throw new Error(`compose: ${plane} mounts ${name}, whose disposition replaces it on the host plane but does not say what a preset row should do; add \`presets: 'replace' | 'drop'\` in composition.mjs`)
+  }
+  return disposition.presets === 'replace' ? disposition.by(deployment) : []
 }
 
-/** The shipped presets that run on CF, composed into literal rows. */
-export function presetTable(deployment) {
+/**
+ * The web composition's entry rows, before the CF transform: the baseline every parity
+ * comparison is made against.
+ * @returns {object[]}
+ */
+export function webEntries() {
+  const layers = ['packages/bundle/base/cordis.patch.yml', 'packages/bundle/web-app/cordis.patch.yml']
+    .map(file => appBoot.loadOverlayPatches('cf-web', join(ROOT, file)))
+  return appBoot.composeEntries(layers, message => { throw new Error(`compose: ${message}`) })
+}
+
+/**
+ * The host composition rows and the ledger of what the CF transform removed from them.
+ * @param {object} deployment The deployment the rows are composed for.
+ * @returns {{ rows: object[], ledger: object[] }}
+ */
+export function hostComposition(deployment) {
+  const composed = webEntries()
+  const ledger = []
+  const rows = transform(composed, deployment, { plane: 'host', override: overrides(deployment), ledger })
+  return { rows, ledger }
+}
+
+/** The host composition rows. */
+export function hostRows(deployment) {
+  return hostComposition(deployment).rows
+}
+
+/**
+ * The shipped presets, composed into literal rows: each preset directory that carries an agent
+ * composition either ships or is declared in `CF_SKIPPED_PRESETS`.
+ * @param {object} deployment The deployment the rows are composed for.
+ * @returns {{ table: Record<string, object>, skipped: string[], ledger: object[] }}
+ */
+export function presetComposition(deployment) {
   const root = join(ROOT, 'apps/cli/config/agent-presets')
   const table = {}
+  const skipped = []
+  const ledger = []
   for (const id of readdirSync(root).sort()) {
     const dir = join(root, id)
     if (!existsSync(join(dir, 'agent.cordis.yml'))) continue
-    // cordis mounts cordis-host-runner (node:vm); minimal shadows the filesystem with the bare local disk provider.
-    if (id === 'cordis' || id === 'minimal') continue
+    if (CF_SKIPPED_PRESETS.has(id)) {
+      skipped.push(id)
+      continue
+    }
     const meta = yaml.load(readFileSync(join(dir, 'preset.yml'), 'utf8')) ?? {}
     const source = readFileSync(join(dir, 'agent.cordis.yml'), 'utf8')
     const rows = yaml.load(source, { schema: include.entryListSchema }) ?? []
@@ -122,11 +163,16 @@ export function presetTable(deployment) {
       ...(meta.name === undefined ? {} : { name: meta.name }),
       ...(meta.description === undefined ? {} : { description: meta.description }),
       ...(meta.order === undefined ? {} : { order: meta.order }),
-      rows: transform(rows, deployment, { replace: new Map(), override: new Map() }),
+      rows: transform(rows, deployment, { plane: `preset:${id}`, override: new Map(), ledger }),
       source,
     }
   }
-  return table
+  return { table, skipped, ledger }
+}
+
+/** The shipped presets that run on CF, composed into literal rows. */
+export function presetTable(deployment) {
+  return presetComposition(deployment).table
 }
 
 /** Every package name a composition (host rows plus preset rows) mounts. */

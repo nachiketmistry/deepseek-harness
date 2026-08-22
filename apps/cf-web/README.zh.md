@@ -13,12 +13,12 @@
 ## 目录结构
 
 - `scripts/workspace-resolver.mjs` 通过各包 `exports` 映射并带 `workerd` 条件，把 `@deepseek-ai/*` 导入解析到已构建的 `lib/`，因此 Worker 消费的是已发布的产物平面，从不消费工作区源码。
-- `scripts/composition.mjs` 读取两个 web bundle 层的包行，并列出 CF 组合不挂载的行及其替换包或原因。
+- `scripts/composition.mjs` 读取两个 web bundle 层的包行，并为 CF 组合不挂载的每一行声明处置方式：由 Cloudflare Provider 替换、对本部署不适用，或是能力缺口。
+- `scripts/parity.mjs` 把这些处置方式与组合器的账目投影为 [composition-parity.md](composition-parity.md)，并在声明过期时失败；`build` 脚本会在打包前运行它，`parity:check` 在签入的报告过期时失败。
 - `scripts/gate0.mjs`、`scripts/build-probe.mjs` 与 `tests/workerd/gate0-eval.workerd.ts` 是 gate 0 的两半。
 - `scripts/build.mjs` 把 `src/worker.ts` 打包为 `dist/worker.js`；`wrangler.jsonc` 部署这个预构建文件。
 - `tests/workerd/*.workerd.ts` 通过 `@cloudflare/vitest-pool-workers`（`vitest.workerd.config.ts`）在 workerd 内运行；仓库的 Node vitest 匹配模式不会命中该后缀。
 
 ## 已知限制与待办
 
-- 在 Host Durable Object、Sandbox 绑定和 CF Service Provider 落地之前，`src/worker.ts` 只是占位。
-- 工作流引擎（`dsh-workflow-worker-thread`、`dsh-tool-workflow`、`dsh-tool-ralph`）、Code Mode 的 worker-thread 运行时以及 `dsh-cordis-host-runner` 依赖 `node:worker_threads` 或 `node:vm`，不进入 CF 组合。
+[composition-parity.md](composition-parity.md) 是当前清单，由构建实际组合出的内容生成：本部署不挂载哪些 web 行、每一行由哪个 Cloudflare Provider 顶替，以及因此缺失哪些能力。当前的未决缺口是 skills（没有任何 Provider 注册进 `skills` 注册表，因此每个 preset 的 `tool-skill` 提供的目录始终为空）与 `minimal` preset。工作流引擎、Code Mode 的 worker-thread 运行时以及 `dsh-cordis-host-runner` 依赖 `node:worker_threads` 或 `node:vm`，按决策留在 CF 组合之外，而非疏漏。

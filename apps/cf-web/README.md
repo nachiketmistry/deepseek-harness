@@ -13,12 +13,12 @@ Results: the complete tree bundles with zero unresolved imports (0.98 MiB gzip);
 ## Layout
 
 - `scripts/workspace-resolver.mjs` resolves `@deepseek-ai/*` imports to each package's built `lib/` through its `exports` map with the `workerd` condition, so the Worker consumes the published artifact plane, never workspace source.
-- `scripts/composition.mjs` reads the package rows of the two web bundle layers and names the rows the CF composition does not mount, with the replacing package or the reason.
+- `scripts/composition.mjs` reads the package rows of the two web bundle layers and declares the disposition of every row the CF composition does not mount: replaced by a Cloudflare provider, not applicable to this deployment, or a capability gap.
+- `scripts/parity.mjs` projects those dispositions and the composer's ledger into [composition-parity.md](composition-parity.md) and fails on a stale one; the `build` script runs it ahead of the bundle, and `parity:check` fails when the checked-in report is out of date.
 - `scripts/gate0.mjs`, `scripts/build-probe.mjs`, and `tests/workerd/gate0-eval.workerd.ts` are the two halves of gate 0.
 - `scripts/build.mjs` bundles `src/worker.ts` into `dist/worker.js`; `wrangler.jsonc` deploys that prebuilt file.
 - `tests/workerd/*.workerd.ts` run inside workerd through `@cloudflare/vitest-pool-workers` (`vitest.workerd.config.ts`); the repository's Node vitest globs do not match the suffix.
 
 ## Known Limitations and Deferred Work
 
-- `src/worker.ts` is a placeholder until the Host Durable Object, the Sandbox binding, and the CF Service Providers land.
-- The workflow engine (`dsh-workflow-worker-thread`, `dsh-tool-workflow`, `dsh-tool-ralph`), the Code Mode worker-thread runtime, and `dsh-cordis-host-runner` need `node:worker_threads` or `node:vm` and stay out of the CF composition.
+[composition-parity.md](composition-parity.md) is the current list, generated from what the build actually composes: which web rows this deployment does not mount, which Cloudflare provider stands in for each, and which capabilities are therefore missing. Open gaps today are skills (no provider registers into the `skills` registry, so every preset's `tool-skill` serves an empty catalog) and the `minimal` preset. The workflow engine, the Code Mode worker-thread runtime, and `dsh-cordis-host-runner` need `node:worker_threads` or `node:vm` and stay out of the CF composition by decision, not by oversight.

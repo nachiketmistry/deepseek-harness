@@ -13,9 +13,11 @@
   "type": "module",
   "scripts": {
     "gate0": "node scripts/gate0.mjs",
-    "build": "node scripts/build.mjs",
+    "parity": "node scripts/parity.mjs",
+    "parity:check": "node scripts/parity.mjs --check",
+    "build": "node scripts/parity.mjs && node scripts/build.mjs",
     "test:workerd": "node scripts/build-probe.mjs && vitest run --config vitest.workerd.config.ts",
-    "deploy": "node scripts/build.mjs && wrangler deploy --containers-rollout=immediate",
+    "deploy": "pnpm run build && wrangler deploy --containers-rollout=immediate",
     "typecheck": "tsc -p tsconfig.json"
   },
   "license": "MIT",
@@ -28,6 +30,7 @@
     "wrangler": "^4.125.0"
   },
   "files": [
+    "composition-parity.md",
     "dist/worker.js",
     "dist/assets",
     "dist/generated",

@@ -6,14 +6,14 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ROOT, workspaceResolver } from './workspace-resolver.mjs'
-import { CF_EXCLUDED_ROWS, compositionPackages } from './composition.mjs'
+import { cfMountsRow, compositionPackages } from './composition.mjs'
 
 const OUT = fileURLToPath(new URL('../dist/probe', import.meta.url))
 rmSync(OUT, { recursive: true, force: true })
 mkdirSync(OUT, { recursive: true })
 // vitest-pool-workers' module fallback resolves the nearest package.json of an imported built file.
 writeFileSync(join(OUT, '..', 'package.json'), '{ "type": "module" }\n')
-const names = compositionPackages().filter(name => !CF_EXCLUDED_ROWS.has(name))
+const names = compositionPackages().filter(cfMountsRow)
 const entries = names.map((name, i) => ({ name, file: `m${i}` }))
 await esbuild.build({
   entryPoints: entries.map(({ name, file }) => ({ in: name, out: file })),

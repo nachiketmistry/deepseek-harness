@@ -11,7 +11,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import { ROOT, relativeToRoot, workspaceResolver } from './workspace-resolver.mjs'
-import { CF_EXCLUDED_ROWS, compositionPackages } from './composition.mjs'
+import { CF_ROW_DISPOSITIONS, cfMountsRow, compositionPackages, describeDisposition } from './composition.mjs'
 
 /** Worker compressed-size limit (paid plan), bytes. */
 const WORKER_LIMIT_BYTES = 10 * 1024 * 1024
@@ -78,7 +78,7 @@ async function bundle(names, label) {
 }
 
 const full = compositionPackages()
-const target = full.filter(name => !CF_EXCLUDED_ROWS.has(name))
+const target = full.filter(cfMountsRow)
 const reports = [
   await bundle(full, 'A. Complete web host tree (every row of base + web-app)'),
   await bundle(target, 'B. CF target composition (A minus the rows the CF packages replace)'),
@@ -91,7 +91,9 @@ const out = [
   ...reports.map(r => r.markdown),
   '## Rows excluded from B',
   '',
-  ...[...CF_EXCLUDED_ROWS.entries()].map(([name, why]) => `- \`${name}\` — ${why}`),
+  'Dispositions are declared in `scripts/composition.mjs`; [composition-parity.md](composition-parity.md) is the report on what each one costs the deployment.',
+  '',
+  ...[...CF_ROW_DISPOSITIONS.keys()].map(name => `- \`${name}\` — ${describeDisposition(name)}`),
   '',
 ].join('\n')
 writeFileSync(join(ROOT, 'apps/cf-web/gate0-imports.md'), out)

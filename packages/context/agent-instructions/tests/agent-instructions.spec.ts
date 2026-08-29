@@ -140,6 +140,14 @@ class RecordingFileSystem extends FileSystem {
     return []
   }
 
+  override async ensureDirectory(path: string, opts?: { cwd?: string; signal?: AbortSignal }): Promise<FsTarget> {
+    const target = await this.resolve(path, opts)
+    const existing = this.entries.get(target.targetKey)
+    if (existing !== undefined && existing.type !== 'directory') throw new Error(`not a directory: ${target.displayPath}`)
+    if (existing === undefined) this.entries.set(target.targetKey, { type: 'directory' })
+    return target
+  }
+
   override async writeText(_target: FsTarget, _content: string, _expected?: FsWriteIntent): Promise<FsWriteOutcome> {
     return { operation: 'update', version: FsVersion('unused'), before: '', after: _content }
   }

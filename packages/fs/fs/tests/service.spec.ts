@@ -69,6 +69,11 @@ class FakeFileSystem extends FileSystem {
       },
     ]
   }
+  override async ensureDirectory(path: string): Promise<FsTarget> {
+    const target = await this.resolve(path)
+    if (this.files.has(target.targetKey)) throw new FsError(`not a directory: ${target.displayPath}`, 'FS_NOT_DIRECTORY')
+    return target
+  }
   override async writeText(target: FsTarget, content: string, _expected?: FsWriteIntent): Promise<FsWriteOutcome> {
     const before = this.files.get(target.targetKey) ?? null
     this.files.set(target.targetKey, content)

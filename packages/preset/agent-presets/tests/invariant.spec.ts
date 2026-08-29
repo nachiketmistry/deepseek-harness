@@ -2,6 +2,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
+import Include from '@deepseek-ai/cordis-plugin-include'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
@@ -10,35 +11,27 @@ import AgentRegistry, { assembleContextFor } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import InvariantRegistry from '@deepseek-ai/dsh-invariants'
 import { describe, expect, it } from 'vitest'
-import AgentPresets, { livePresetMounts } from '@deepseek-ai/dsh-agent-presets'
+import AgentPresets, { livePresetMounts, type Config } from '@deepseek-ai/dsh-agent-presets'
 import * as AgentPresetsInvariant from '@deepseek-ai/dsh-agent-presets/invariant'
-import { fixturePreset, MemoryPresetSource, type MemoryPreset } from './memory-source.ts'
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
-const SYSTEM = join(FIXTURES, 'system')
-const USER = join(FIXTURES, 'user')
+const ROOTS = [
+  { path: join(FIXTURES, 'system'), trust: 'system' as const },
+  { path: join(FIXTURES, 'user'), trust: 'user' as const },
+]
 
-/** The fixture presets this companion's cases mount. */
-function fixtureTable(): Omit<MemoryPreset, 'stamp'>[] {
-  return [
-    fixturePreset(SYSTEM, 'standard', 'system'),
-    fixturePreset(USER, 'late', 'user'),
-    fixturePreset(USER, 'isolated', 'user'),
-  ]
-}
-
-async function harness(entries: Omit<MemoryPreset, 'stamp'>[] = fixtureTable()): Promise<Context> {
+async function harness(roster: Partial<Config> = {}): Promise<Context> {
   const ctx = new Context()
   ctx.baseUrl = pathToFileURL(FIXTURES).href + '/'
   await ctx.plugin(Loader)
+  ctx.loader.builtins.include = Include
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(SessionStore)
   await ctx.plugin(SystemPrompt, { persona: '' })
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(AgentRegistry)
   await ctx.plugin(AgentLoop, { agents: [] })
-  await ctx.plugin(MemoryPresetSource, { entries })
-  await ctx.plugin(AgentPresets, { default: 'standard' })
+  await ctx.plugin(AgentPresets, { default: 'standard', roots: ROOTS, includeShippedRoot: false, includeUserRoot: false, ...roster })
   await ctx.plugin(InvariantRegistry)
   await ctx.plugin(AgentPresetsInvariant)
   return ctx
@@ -104,31 +97,23 @@ describe('agent-presets invariants', () => {
       .rejects.toThrow(/without joining any agent preset/)
   })
 
-  it('rejects one just the same when the source currently supplies nothing', async () => {
-    // A roster is a roster whatever its source holds right now: the source
-    // is live, so an empty listing is a moment, not a deployment that opted
-    // out. A rosterless deployment does not mount this plugin at all.
-    const ctx = await harness([])
-    const handle = await ctx.agents.create({ sessionId: SessionId('inv-empty-source') })
+  it('rejects one just the same when the derived home root is the whole roster', async () => {
+    // The shape this plugin defaults to: an app configures nothing and the
+    // roster is the harness home alone. A roster is a roster however its roots
+    // were resolved, so the fail-loud half must not go quiet here — it read
+    // `config.roots` once, which is empty in exactly this case.
+    const ctx = await harness({ roots: [], includeUserRoot: true })
+    const handle = await ctx.agents.create({ sessionId: SessionId('inv-derived-only') })
 
     await expect(ctx.systemPrompt.assemble(assembleContextFor(handle.agent)))
       .rejects.toThrow(/without joining any agent preset/)
   })
 
-  it('stays silent for a composition that mounts no roster', async () => {
-    // Every surface except the Web bundle keeps its model-facing rows in the
-    // host plane and composes no roster, so an agent with a chain of one is
-    // exactly right there.
-    const ctx = new Context()
-    await ctx.plugin(Loader)
-    await ctx.plugin(LlmRuntime)
-    await ctx.plugin(SessionStore)
-    await ctx.plugin(SystemPrompt, { persona: '' })
-    await ctx.plugin(ToolRuntime)
-    await ctx.plugin(AgentRegistry)
-    await ctx.plugin(AgentLoop, { agents: [] })
-    await ctx.plugin(InvariantRegistry)
-    await ctx.plugin(AgentPresetsInvariant)
+  it('stays silent for a composition that opted out of every root', async () => {
+    // `includeUserRoot: false` with no configured roots is a deployment that
+    // mounts the roster but keeps its agents on the host plane; there is no
+    // roster to join, so an unjoined agent is not a violation.
+    const ctx = await harness({ roots: [], includeUserRoot: false })
     const handle = await ctx.agents.create({ sessionId: SessionId('inv-no-roster') })
 
     await expect(ctx.systemPrompt.assemble(assembleContextFor(handle.agent))).resolves.toBeDefined()

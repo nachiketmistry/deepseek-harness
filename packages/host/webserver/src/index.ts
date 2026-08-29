@@ -74,6 +74,12 @@ export interface WebServerSocket {
    */
   close(code?: number, reason?: string): void
   /**
+   * Send one Ping control frame, where the provider's protocol has them. A
+   * provider whose platform owns keepalive itself omits this member, and a
+   * caller treats its absence as "the transport already does this".
+   */
+  ping?(): void
+  /**
    * Subscribe to a socket event.
    * @param type - `message` (a client frame), `close`, or `error`.
    * @param listener - receives the platform event; `message` events carry `data`.

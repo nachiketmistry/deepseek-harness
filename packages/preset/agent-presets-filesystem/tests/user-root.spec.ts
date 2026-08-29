@@ -48,6 +48,8 @@ async function roster(config: Partial<Config> = {}): Promise<Context> {
   await ctx.plugin(Loader)
   await ctx.plugin(FilesystemAgentPresetSource, {
     roots: [{ path: SYSTEM_ROOT, trust: 'system' as const }],
+    // The package's shipped presets would shadow this file's fixture ids.
+    includeShippedRoot: false,
     includeUserRoot: true,
     ...config,
   })

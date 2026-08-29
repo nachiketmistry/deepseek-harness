@@ -1,7 +1,10 @@
 /** Request-body cap applied to every `/api` request before its handler reads the body. */
 
-/** Default cap: 160 MiB, the composed aggregate image payload plus envelope headroom. */
-export const DEFAULT_MAX_REQUEST_BODY_BYTES = 160 * 1024 * 1024
+/** Default cap, sized for the default aggregate image limit (200 MiB) after
+ * base64 expansion plus envelope headroom (~267.7 MiB required), rounded up for
+ * slack. An oversize body is refused before its handler runs, so this cap is
+ * also the per-request resident bound. */
+export const DEFAULT_MAX_REQUEST_BODY_BYTES = 300 * 1024 * 1024
 
 /** Transport-independent request handler: the webserver route handler shape. */
 export interface FetchHandler {

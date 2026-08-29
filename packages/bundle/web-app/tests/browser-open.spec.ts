@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
-import NodeWebServer from '@deepseek-ai/dsh-host-webserver-node'
+import WebServer from '@deepseek-ai/dsh-host-webserver'
 import { apply, internals } from '../src/index.ts'
 
 const contexts: Context[] = []
@@ -29,6 +29,7 @@ afterEach(async () => {
   vi.unstubAllEnvs()
   Reflect.deleteProperty(globalThis, '__dshWebAppApply')
   Reflect.deleteProperty(globalThis, '__dshWebServer')
+  Reflect.deleteProperty(globalThis, '__dshConnection')
 })
 
 describe('web app browser startup', () => {
@@ -42,8 +43,14 @@ describe('web app browser startup', () => {
     internals.resolveDistIndex = () => index
 
     const webserverModule = join(root, 'webserver.mjs')
+    const connectionModule = join(root, 'connection.mjs')
     const webAppModule = join(root, 'web-app.mjs')
     writeFileSync(webserverModule, 'export default globalThis.__dshWebServer\n')
+    writeFileSync(connectionModule, [
+      "export const inject = ['webServer']",
+      "export const apply = ctx => ctx.provide('connection', globalThis.__dshConnection)",
+      '',
+    ].join('\n'))
     writeFileSync(webAppModule, [
       "export const name = 'fixture-web-app'",
       "export const inject = ['webServer']",
@@ -57,6 +64,8 @@ describe('web app browser startup', () => {
       '  config:',
       '    host: 127.0.0.1',
       '    port: 0',
+      '- id: connection',
+      `  name: ${pathToFileURL(connectionModule).href}`,
       '- id: web-app',
       `  name: ${pathToFileURL(webAppModule).href}`,
       '  config:',
@@ -69,10 +78,26 @@ describe('web app browser startup', () => {
 
     const globals = globalThis as unknown as {
       __dshWebAppApply: typeof apply
-      __dshWebServer: typeof NodeWebServer
+      __dshWebServer: typeof WebServer
+      __dshConnection: {
+        authenticatedUrl(baseUrl: string): string
+        authorizeIndex(): boolean
+        requestRejection(): undefined
+        rpc: object
+      }
     }
     globals.__dshWebAppApply = apply
-    globals.__dshWebServer = NodeWebServer
+    globals.__dshWebServer = WebServer
+    globals.__dshConnection = {
+      authenticatedUrl: (baseUrl) => {
+        const url = new URL(baseUrl)
+        url.searchParams.set('token', 'fixture-token')
+        return url.href
+      },
+      authorizeIndex: () => true,
+      requestRejection: () => undefined,
+      rpc: {},
+    }
 
     let openedUrl: string | undefined
     let openedStatus: number | undefined
@@ -95,7 +120,7 @@ describe('web app browser startup', () => {
     await ctx.loader.await()
     await opened
 
-    expect(openedUrl).toBe(`http://127.0.0.1:${String(ctx.webServer.address?.port)}`)
+    expect(openedUrl).toBe(`http://127.0.0.1:${String(ctx.webServer.port)}/?token=fixture-token`)
     expect(openedStatus).toBe(200)
   })
 })

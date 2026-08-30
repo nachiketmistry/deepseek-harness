@@ -203,8 +203,11 @@ export function clientBundles(names) {
     const client = pkg.exports?.['./client']
     const rel = typeof client === 'string' ? client : client?.default
     if (typeof rel !== 'string') throw new Error(`compose: ${root} declares dsh.client but exports no ./client bundle`)
-    const { platform: _platform, ...description } = decl
-    out.set(root, { description: { ...description, external: description.external ?? [], immediately: description.immediately === true }, path: join(dir, rel) })
+    const { platform: _platform, ...declaration } = decl
+    out.set(root, {
+      declaration: { ...declaration, external: declaration.external ?? [], immediately: declaration.immediately === true },
+      path: join(dir, rel),
+    })
   }
   return out
 }

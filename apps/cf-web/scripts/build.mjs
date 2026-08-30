@@ -59,7 +59,7 @@ writeFileSync(join(GEN, 'client-table.js'), [
   ...entries.filter(({ file }) => existsSync(join(GEN, 'client', `${file}.map.txt`))).map(({ file }, i) => `import s${i} from './client/${file}.map.txt'`),
   '/** Client bundles by package name. */',
   'export const clientTable = new Map([',
-  ...entries.map(({ name, bundle, file }, i) => `  [${JSON.stringify(name)}, { description: ${JSON.stringify(bundle.description)}, code: c${i}${existsSync(join(GEN, 'client', `${file}.map.txt`)) ? `, map: s${i}` : ''} }],`),
+  ...entries.map(({ name, bundle, file }, i) => `  [${JSON.stringify(name)}, { declaration: ${JSON.stringify(bundle.declaration)}, code: c${i}${existsSync(join(GEN, 'client', `${file}.map.txt`)) ? `, map: s${i}` : ''} }],`),
   '])',
   '',
 ].join('\n'))

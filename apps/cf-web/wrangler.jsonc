@@ -16,8 +16,15 @@
       { "name": "SANDBOX", "class_name": "Sandbox" }
     ]
   },
+  // Storage units are versioned and reject an older stored format, so a schema
+  // bump in a composed plugin is cleared by destroying the namespace and
+  // letting the next boot stamp the current versions. v2 ran against a deploy
+  // that carried no HostObject class, which is what a delete migration
+  // requires; v3 recreates it empty.
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["HostObject", "Sandbox"] }
+    { "tag": "v1", "new_sqlite_classes": ["HostObject", "Sandbox"] },
+    { "tag": "v2", "deleted_classes": ["HostObject"] },
+    { "tag": "v3", "new_sqlite_classes": ["HostObject"] }
   ],
   "containers": [
     { "class_name": "Sandbox", "image": "./Dockerfile", "max_instances": 1, "instance_type": "standard" }

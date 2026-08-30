@@ -175,6 +175,12 @@ importers:
       '@deepseek-ai/dsh-client-bundle-source-static':
         specifier: workspace:^
         version: link:../../packages/cf/client-bundle-source-static
+      '@deepseek-ai/dsh-principal':
+        specifier: workspace:^
+        version: link:../../packages/identity/principal
+      '@deepseek-ai/dsh-principal-jwt':
+        specifier: workspace:^
+        version: link:../../packages/cf/principal-jwt
       '@deepseek-ai/dsh-typert-artifacts-static':
         specifier: workspace:^
         version: link:../../packages/cf/typert-artifacts-static
@@ -191,6 +197,9 @@ importers:
       esbuild:
         specifier: ^0.28.2
         version: 0.28.2
+      jose:
+        specifier: ^6.2.3
+        version: 6.2.3
       js-yaml:
         specifier: ^4.2.0
         version: 4.3.1
@@ -1866,6 +1875,25 @@ importers:
       '@deepseek-ai/schemastery':
         specifier: link:../../../vendor/schemastery
         version: link:../../../vendor/schemastery
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+
+  packages/cf/principal-jwt:
+    dependencies:
+      '@deepseek-ai/dsh-principal':
+        specifier: workspace:^
+        version: link:../../identity/principal
+      '@deepseek-ai/schemastery':
+        specifier: link:../../../vendor/schemastery
+        version: link:../../../vendor/schemastery
+      jose:
+        specifier: ^6.2.3
+        version: 6.2.3
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: workspace:^

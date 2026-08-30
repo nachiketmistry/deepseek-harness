@@ -229,6 +229,7 @@
     { "path": "./packages/cf/storage-do" },
     { "path": "./packages/cf/settings-do" },
     { "path": "./packages/cf/credentials-secrets" },
+    { "path": "./packages/cf/principal-jwt" },
     { "path": "./packages/cf/attachment-r2" },
     { "path": "./packages/cf/spill-r2" },
     { "path": "./packages/cf/subprocess-cf-sandbox" },

@@ -17,5 +17,8 @@ DSH_CF_AUTH_DEV_DATABASE_URL="postgresql://user:password@host.neon.tech/dsh_auth
 
 # Override the deployed origins from wrangler.jsonc: Better Auth signs cookies
 # and builds redirects against its base URL, so a local run must name itself.
+# The second trusted origin is the local web GUI (`apps/cf-web`'s `pnpm run
+# dev`): its sign-in page fetches a token from this service across origins, and
+# an origin not listed here is refused before the browser sees a response.
 AUTH_BASE_URL="http://localhost:8788"
-AUTH_TRUSTED_ORIGINS="http://localhost:8788"
+AUTH_TRUSTED_ORIGINS="http://localhost:8788,http://localhost:8790"

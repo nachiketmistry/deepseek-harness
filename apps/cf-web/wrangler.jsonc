@@ -29,6 +29,15 @@
   "containers": [
     { "class_name": "Sandbox", "image": "./Dockerfile", "max_instances": 1, "instance_type": "standard" }
   ],
+  // The identity service this deployment verifies against. The Worker refuses
+  // every request that carries no token this key set accepts, before it
+  // addresses any object, so a deployment naming the wrong service serves
+  // nobody rather than serving everybody one object.
+  "vars": {
+    "AUTH_BASE_URL": "https://dsh-cf-auth.shytiger.workers.dev",
+    "AUTH_JWKS_URL": "https://dsh-cf-auth.shytiger.workers.dev/api/auth/jwks",
+    "AUTH_ISSUER": "https://dsh-cf-auth.shytiger.workers.dev"
+  },
   "r2_buckets": [
     { "binding": "ATTACHMENTS", "bucket_name": "dsh-cf-web-attachments" },
     { "binding": "SPILL", "bucket_name": "dsh-cf-web-spill" }

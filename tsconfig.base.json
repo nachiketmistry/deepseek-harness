@@ -262,6 +262,8 @@
       "@deepseek-ai/dsh-principal/invariant": ["./packages/identity/principal/src/invariant.ts"],
       "@deepseek-ai/dsh-principal-local": ["./packages/identity/principal-local/src"],
       "@deepseek-ai/dsh-principal-local/invariant": ["./packages/identity/principal-local/src/invariant.ts"],
+      "@deepseek-ai/dsh-principal-jwt": ["./packages/cf/principal-jwt/src"],
+      "@deepseek-ai/dsh-principal-jwt/invariant": ["./packages/cf/principal-jwt/src/invariant.ts"],
       "@deepseek-ai/dsh-app-boot": ["./packages/boot/app-boot/src"],
       "@deepseek-ai/dsh-app-boot/invariant": ["./packages/boot/app-boot/src/invariant.ts"],
       "@deepseek-ai/dsh-atomic-write": ["./packages/util/atomic-write/src"],

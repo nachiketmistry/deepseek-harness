@@ -69,7 +69,7 @@ async function recorded(response: Response): Promise<{
 }
 
 async function mounted(
-  config?: { trustedHosts?: string[]; launchTokenRef?: string },
+  config?: { trustedHosts?: string[]; launchTokenRef?: string; browserAuth?: 'launch-token' | 'edge' },
   refs?: Record<string, string>,
 ): Promise<{
   routes: WebRoute[]
@@ -118,6 +118,28 @@ describe('connection node half', () => {
       .rejects.toThrow(/launchTokenRef "DSH_LAUNCH_TOKEN" is unset/u)
     await expect(mounted({ launchTokenRef: 'not a ref' }, { 'not a ref': token }))
       .rejects.toThrow(/credential ref "not a ref" must match/u)
+  })
+
+  it('admits a browser request the deployment authenticated at its ingress', async () => {
+    const edge = await mounted({ browserAuth: 'edge', trustedHosts: ['dsh.example'] })
+    // No launch token was exchanged and no cookie is present: the ingress is
+    // what refused everything that did not get this far.
+    expect(edge.connection.requestRejection(fakeRequest({ host: 'dsh.example' }))).toBeUndefined()
+    expect(edge.connection.authorizeIndex(fakeRequest({ host: 'dsh.example' }, '/'), {
+      writeHead() { throw new Error('an edge-authenticated index must not be refused') },
+      end() { throw new Error('an edge-authenticated index must not be refused') },
+    })).toBe(true)
+    // The fence the ingress does not replace still applies.
+    expect(edge.connection.requestRejection(fakeRequest({ host: 'elsewhere.example' }))).toBe(403)
+    expect(() => edge.connection.authenticatedUrl('http://dsh.example')).toThrow(/mints no launch URL/u)
+    await edge.dispose()
+  })
+
+  it('refuses a deployment that both authenticates at its ingress and names a launch token', async () => {
+    await expect(mounted(
+      { browserAuth: 'edge', launchTokenRef: 'DSH_LAUNCH_TOKEN' },
+      { DSH_LAUNCH_TOKEN: 'deployment-launch-token-00000000' },
+    )).rejects.toThrow(/leaves launchTokenRef unused/u)
   })
 
   it('reserves enough default carrier capacity for the 200 MiB image batch', () => {

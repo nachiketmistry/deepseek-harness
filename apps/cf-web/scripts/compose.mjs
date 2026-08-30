@@ -24,9 +24,8 @@ export function deploymentOf(env = process.env) {
   const publicHost = env.DSH_CF_PUBLIC_HOST ?? 'dsh-cf-web.shytiger.workers.dev'
   return {
     publicHost,
-    publicUrl: `https://${publicHost}`,
+    publicUrl: env.DSH_CF_PUBLIC_URL ?? `https://${publicHost}`,
     workspaceRoot: '/workspace',
-    launchTokenRef: env.DSH_CF_LAUNCH_TOKEN_REF ?? 'DSH_LAUNCH_TOKEN',
   }
 }
 
@@ -38,12 +37,12 @@ function overrides(deployment) {
     ['tools', {}],
     // The Node web runtime's bind-derived trust list becomes the deployment's public host; the
     // row no longer waits for the `webRuntime` service that derived it.
-    // A Worker has no terminal and is restarted by its platform, so the launch
-    // token is the deployment's own credential rather than one generated per
-    // boot and printed to whoever started the process.
+    // The Worker verifies the identity service's token before it addresses this
+    // object, and nothing can reach the object by another path, so the Host
+    // authenticates nothing of its own. Its Host and Origin fence still runs.
     ['connection', {
       trustedHosts: [deployment.publicHost],
-      launchTokenRef: deployment.launchTokenRef,
+      browserAuth: 'edge',
     }],
     ['storage-domain', { backend: 'do' }],
     ['api-gateway', { nativeOpen: false, cwd: deployment.workspaceRoot, home: deployment.workspaceRoot }],

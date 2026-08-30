@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // The edge acceptance run's own deployment: the shipped edge module over a
+  // Host object that records what it was addressed as. It carries the real
+  // deployment's compatibility settings and Durable Object class name, and
+  // none of its containers, buckets, or assets, because the object under this
+  // edge is not the harness tree.
+  "name": "dsh-cf-web-edge-test",
+  "main": "tests/workerd/edge/entry.ts",
+  "compatibility_date": "2026-08-20",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [{ "name": "HOST", "class_name": "HostObject" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["HostObject"] }]
+}

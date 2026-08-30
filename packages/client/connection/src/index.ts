@@ -9,6 +9,8 @@ import { API_PATH } from './api-path.ts'
 import { DEFAULT_MAX_REQUEST_BODY_BYTES, withBodyLimit } from './body-limit.ts'
 import { assertTrustedAuthority } from './api-request-trust.ts'
 import { BrowserAuth } from './browser-auth.ts'
+import type { BrowserAuthority } from './browser-authority.ts'
+import { EdgeVerifiedAuthority } from './edge-auth.ts'
 import { HostConnectionService } from './rpc-host.ts'
 
 export type {
@@ -42,6 +44,7 @@ export {
 export { HostConnectionService } from './rpc-host.ts'
 
 export { API_PATH } from './api-path.ts'
+export type { BrowserAuthority } from './browser-authority.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'client-connection'
@@ -89,6 +92,16 @@ export interface ConnectionConfig {
   cookieMaxAgeDays?: number
   /** Maximum buffered JSON body for every `/api` request. Default: 300 MiB. */
   maxRequestBodyBytes?: number
+  /**
+   * Who authenticates a browser request before it reaches this Host.
+   * `launch-token` (default): this Host does, through the launch-token
+   * exchange and the signed session cookie it mints. `edge`: the deployment's
+   * ingress already did, and this Host is reachable by no other path — a
+   * Durable Object behind the Worker that verifies the identity service's
+   * token is the case this exists for. The `/api` Host and Origin fence
+   * applies either way.
+   */
+  browserAuth?: 'launch-token' | 'edge'
 }
 
 export const Config: z<ConnectionConfig> = z.object({
@@ -96,6 +109,7 @@ export const Config: z<ConnectionConfig> = z.object({
   launchTokenRef: z.string().role('credential-ref'),
   cookieMaxAgeDays: z.natural().min(1).default(30),
   maxRequestBodyBytes: z.natural().min(1).default(DEFAULT_MAX_REQUEST_BODY_BYTES),
+  browserAuth: z.union(['launch-token', 'edge']).default('launch-token'),
 })
 
 /**
@@ -117,6 +131,35 @@ async function suppliedLaunchToken(ctx: Context, ref: string | undefined): Promi
 }
 
 /**
+ * Build the authority that decides whether a browser request reaches this Host.
+ * @param ctx - Host plugin context carrying the credential provider.
+ * @param config - resolved plugin config.
+ * @param cookieMaxAgeDays - absolute browser-session lifetime, for the cookie authority.
+ * @returns the configured authority.
+ * @throws when an edge-authenticated deployment also names a launch token:
+ * the token would admit its holder past a Host the ingress is what guards, so
+ * a deployment that configured both has not decided which one authenticates.
+ */
+async function browserAuthority(
+  ctx: Context,
+  config: ConnectionConfig | undefined,
+  cookieMaxAgeDays: number,
+): Promise<BrowserAuthority> {
+  if (config?.browserAuth === 'edge') {
+    if (config.launchTokenRef !== undefined) {
+      throw new Error('client-connection: browserAuth "edge" leaves launchTokenRef unused; remove one of them')
+    }
+    return new EdgeVerifiedAuthority()
+  }
+  return BrowserAuth.create(
+    ctx.root,
+    ctx.credentials,
+    cookieMaxAgeDays,
+    await suppliedLaunchToken(ctx, config?.launchTokenRef),
+  )
+}
+
+/**
  * Mounts the API gateway under the browser transport prefix. Every request on
  * the prefix passes the Host/Origin browser-trust fence and persistent browser
  * authentication before dispatch.
@@ -135,12 +178,7 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
   const connection = new HostConnectionService(
     ctx,
     trustedHosts,
-    await BrowserAuth.create(
-      ctx.root,
-      ctx.credentials,
-      cookieMaxAgeDays,
-      await suppliedLaunchToken(ctx, config?.launchTokenRef),
-    ),
+    await browserAuthority(ctx, config, cookieMaxAgeDays),
   )
   const fetchHandler = withBodyLimit(connection.createSharedFetchHandler(API_PATH), maxRequestBodyBytes)
   const route: WebRoute = {

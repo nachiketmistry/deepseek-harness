@@ -9,6 +9,8 @@
     "src/api-path.ts",
     "src/api-request-trust.ts",
     "src/browser-auth.ts",
+    "src/browser-authority.ts",
+    "src/edge-auth.ts",
     "src/index.ts",
     "src/invariant.ts",
     "src/loopback-hostname.ts",

@@ -16,6 +16,7 @@ export {
   HOST_OBJECT_NAME_PREFIX,
   HOST_OBJECT_NAME_VERSION,
   hostObjectName,
+  parseHostObjectName,
 } from './host-object-name.ts'
 export type { Principal, PrincipalSubject } from './types.ts'
 

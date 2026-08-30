@@ -42,6 +42,7 @@
     // smoke policy). webserver has zero workspace deps and no cordis merge,
     // so it cannot drag host-side Context augmentation into this program.
     { "path": "./packages/host/webserver" },
+    { "path": "./packages/client/bundle-source-node" },
     // Compaction seam: ui-chat type-imports the canonical checkpoint contract
     // from the cordis-free dsh-compaction/checkpoint leaf. Composite rootDir
     // rules make that path depend on this project reference.

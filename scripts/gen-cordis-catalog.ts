@@ -58,12 +58,14 @@ export const SERVICE_PAGE: Record<string, string> = {
   agentDefaultModel: 'core.md',
   agentPresets: 'core.md',
   agentPresetSource: 'core.md',
+  typertArtifacts: 'typert.md',
   agents: 'core.md',
   approval: 'approval.md',
   attachments: 'attachment.md',
   shell: 'shell.md',
   shellEnv: 'shell.md',
   clientModules: 'client-modules.md',
+  clientBundleSource: 'client-modules.md',
   codeRuntime: 'code-runtime.md',
   commands: 'commands.md',
   compaction: 'compaction.md',
@@ -81,6 +83,8 @@ export const SERVICE_PAGE: Record<string, string> = {
   goals: 'goal.md',
   inspector: 'extensions.md',
   webServer: 'web-server.md',
+  cf: 'cloudflare.md',
+  cfSandbox: 'cloudflare.md',
   invariants: 'invariants.md',
   llm: 'llm-streaming.md',
   lsp: 'lsp.md',
@@ -582,6 +586,8 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   PresetSpec: 'permission-presets.md',
   InvariantInstaller: 'invariants.md',
   WebRoute: 'web-server.md',
+  WebSocketRoute: 'web-server.md',
+  WebRequestHandler: 'web-server.md',
   IndexInjection: 'web-server.md',
   StorageBackend: 'storage.md',
   StorageForms: 'storage.md',
@@ -629,6 +635,8 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
 /** TypeScript lib and pinned framework types with no repository-owned data page. */
 export const FOUNDATION_TYPE_NAMES: ReadonlySet<string> = new Set([
   'AbortSignal',
+  'Request',
+  'Response',
   'AsyncIterable',
   'Context',
   'Error',
@@ -710,6 +718,12 @@ export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   Translate: 'service-local bound translator is owned by packages/client/i18n/src/index.ts',
   WebUpgradeRoute:
     'upgrade route registration contract is owned by packages/host/webserver/src/index.ts',
+  ResolvedClientBundle:
+    'client bundle source resolution result is owned by packages/client/modules/src/bundle-source.ts',
+  ClientBundleSnapshot:
+    'client bundle bytes and baseline are owned by packages/client/modules/src/bundle-source.ts',
+  ClientSourceMapSnapshot:
+    'client bundle source map snapshot is owned by packages/client/modules/src/bundle-source.ts',
   InvariantRegistration: 'service-local lifecycle handle is owned by packages/runtime-diagnostics/invariants/README.md',
   JsonValue: 'JSON value union is owned by packages/core/session/src/json.ts',
   KnobState: 'projection unit state fields are owned by packages/interaction/permission-presets/README.md',

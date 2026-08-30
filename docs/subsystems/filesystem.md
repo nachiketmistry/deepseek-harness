@@ -406,6 +406,15 @@ abstract readBytes(target: FsTarget, signal: AbortSignal | undefined, maxBytes: 
 abstract listDir(target: FsTarget, signal?: AbortSignal): Promise<FsDirEntry[]>
 
 /**
+ * Ensure a directory exists, creating missing ancestors, and resolve it.
+ * An existing directory is left as it is; an existing non-directory rejects.
+ * @param path - the directory path; relative paths resolve against `opts.cwd`.
+ * @param opts - optional cwd override and cancellation signal.
+ * @returns the directory's resolved target.
+ */
+abstract ensureDirectory(path: string, opts?: { cwd?: string; signal?: AbortSignal }): Promise<FsTarget>
+
+/**
  * Atomically create or replace UTF-8 text. `expected` guards intent and
  * staleness; omission allows unconditional overwrite.
  * @param target - the resolved target to write.

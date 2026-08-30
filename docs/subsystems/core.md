@@ -395,8 +395,8 @@ Discovery is unmemoized: `list()` and `resolve()` re-read the roots on every cal
 
 ```ts cordis-catalog
 /**
- * Every preset the configured roots currently supply.
- * @returns the presets, first-root-wins per id.
+ * Every preset the source currently supplies, broken ones included.
+ * @returns the presets in the source's display order.
  */
 async list(): Promise<AgentPreset[]>
 
@@ -607,6 +607,68 @@ async standingKeyFor(id?: string): Promise<ScopeKey>
 Types: [ScopeKey](scope.md)
 
 Source: [`packages/preset/agent-presets/src/index.ts`](../../packages/preset/agent-presets/src/index.ts)
+
+<a id="ctxagentpresetsource--agentpresetsource-abstract-seam"></a>
+
+### `ctx.agentPresetSource` — `AgentPresetSource` (abstract seam)
+
+Where one deployment's presets come from and how they are authored.
+
+Every method takes a preset the source itself listed: `preset.path` is the source-owned locator (the composition file path for the filesystem source; another source may use a non-file locator) and the registry never interprets it.
+
+```ts cordis-catalog
+/**
+ * Every preset this source supplies, broken ones included (`broken` set).
+ * Unmemoized: each call reflects the source's current state.
+ * @returns the presets in display order.
+ */
+abstract list(): Promise<AgentPreset[]>
+
+/**
+ * Opaque identity of a preset's current composition.
+ *
+ * A changed value starts a new standing generation for sessions created
+ * afterwards; an unreadable composition yields `undefined`, which serves the
+ * generation already mounted rather than failing the session.
+ * @param preset - a preset this source listed.
+ * @returns the stamp, or `undefined` when the composition cannot be read.
+ */
+abstract stamp(preset: AgentPreset): Promise<string | undefined>
+
+/**
+ * The rows to mount, the stamp they were read under, and the base URL
+ * relative row specifiers resolve against.
+ * @param preset - a preset this source listed.
+ * @returns the composition.
+ * @throws when the composition cannot be read or is not a list of rows.
+ */
+abstract composition(preset: AgentPreset): Promise<PresetComposition>
+
+/**
+ * The composition's source text, for the authoring read.
+ * @param preset - a preset this source listed.
+ * @returns the text exactly as stored.
+ */
+abstract read(preset: AgentPreset): Promise<string>
+
+/**
+ * Create a locally authored preset by copying an existing one whole.
+ * @param source - the preset the copy starts from; any trust is accepted.
+ * @param id - the new preset's id.
+ * @param name - display name for the copy; absent falls back to the id.
+ * @throws when the id is unusable or already occupied, or the source is not authorable.
+ */
+abstract copy(source: AgentPreset, id: string, name?: string): Promise<void>
+
+/**
+ * Delete a locally authored preset.
+ * @param preset - a preset this source listed.
+ * @throws when the preset ships with the deployment or is not this source's to delete.
+ */
+abstract remove(preset: AgentPreset): Promise<void>
+```
+
+Source: [`packages/preset/agent-presets/src/source.ts`](../../packages/preset/agent-presets/src/source.ts)
 
 <a id="ctxagents--agentregistry"></a>
 

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import Storage from '@deepseek-ai/dsh-storage'
+import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import type { StorageBackend } from '@deepseek-ai/dsh-storage'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import type { DomainChanged } from '@deepseek-ai/dsh-storage-domain'
@@ -38,6 +39,9 @@ interface HarnessOptions {
 async function harness(options: HarnessOptions = {}) {
   const pool = options.pool ?? new MemoryMediaPool()
   const ctx = new Context()
+  // The registry canonicalizes paths through the composed filesystem, so these
+  // cases mount the local one over the real temp directories they create.
+  await ctx.plugin(LocalFileSystem, { cwd: '/' })
   await ctx.plugin(Storage)
   ctx.storage.backend.register('memory', options.backend ?? new MemoryStorageBackend(pool))
   const facility = new DomainFacility(ctx, { backend: 'memory', routes: {} })
@@ -82,6 +86,9 @@ async function harness(options: HarnessOptions = {}) {
 /** Boot only the storage side, for dependency-pending and startup-failure cases. */
 async function storageContext(pool: MemoryMediaPool, backend: StorageBackend = new MemoryStorageBackend(pool)) {
   const ctx = new Context()
+  // The registry canonicalizes paths through the composed filesystem, so these
+  // cases mount the local one over the real temp directories they create.
+  await ctx.plugin(LocalFileSystem, { cwd: '/' })
   await ctx.plugin(Storage)
   ctx.storage.backend.register('memory', backend)
   const facility = new DomainFacility(ctx, { backend: 'memory', routes: {} })
@@ -398,7 +405,7 @@ describe('WorkspaceRegistry create and lookup', () => {
     await writeFile(file, 'file')
     const { registry } = await harness()
     await expect(registry.create(join(parent, 'missing'))).rejects.toMatchObject({ code: 'ENOENT' })
-    await expect(registry.create(file)).rejects.toThrow(/not a directory/)
+    await expect(registry.create(file)).rejects.toThrow(/path is not a directory/)
     await expect(registry.resolveByPath(join(parent, 'missing'))).rejects.toMatchObject({ code: 'ENOENT' })
     expect(registry.list()).toEqual([])
   })
@@ -709,7 +716,7 @@ describe('Workspace session ordering', () => {
     await expect(workspace.attachSession(SessionId('mismatch'))).rejects.toThrow(/resolves to/)
     await expect(workspace.attachSession(SessionId('no-cwd'))).rejects.toThrow(/no cwd/)
     await expect(workspace.attachSession(SessionId('gone'))).rejects.toThrow(/does not resolve/)
-    await expect(workspace.attachSession(SessionId('file'))).rejects.toThrow(/not a directory/)
+    await expect(workspace.attachSession(SessionId('file'))).rejects.toThrow(/does not resolve to a directory/)
     await expect(workspace.attachSession(SessionId('unknown'))).rejects.toThrow(/no such session/)
     expect(workspace.sessionIds).toEqual([])
   })

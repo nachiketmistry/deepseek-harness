@@ -137,9 +137,9 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     methods: [
       {
         signature: 'async list(): Promise<AgentPreset[]>',
-        description: 'Every preset the configured roots currently supply.',
+        description: 'Every preset the source currently supplies, broken ones included.',
         parameters: [],
-        returns: 'the presets, first-root-wins per id.',
+        returns: 'the presets in the source\'s display order.',
       },
       {
         signature: '@Remote(\'list\') async remoteExportList(): Promise<AgentPresetRoster>',
@@ -240,6 +240,50 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [{ name: 'id', description: 'the preset id, or `undefined` for {@link defaultId}.' }],
         returns: 'the standing scope key readers pass as a registry view scope.',
         throws: ['when the preset is unknown or its composition is unusable.'],
+      },
+    ],
+  },
+  {
+    key: 'agentPresetSource',
+    summary: 'Where one deployment\'s presets come from and how they are authored.',
+    description: 'Where one deployment\'s presets come from and how they are authored.\n\nEvery method takes a preset the source itself listed: `preset.path` is the source-owned locator (the composition file path for the filesystem source; another source may use a non-file locator) and the registry never interprets it.',
+    methods: [
+      {
+        signature: 'abstract list(): Promise<AgentPreset[]>',
+        description: 'Every preset this source supplies, broken ones included (`broken` set). Unmemoized: each call reflects the source\'s current state.',
+        parameters: [],
+        returns: 'the presets in display order.',
+      },
+      {
+        signature: 'abstract stamp(preset: AgentPreset): Promise<string | undefined>',
+        description: 'Opaque identity of a preset\'s current composition.\n\nA changed value starts a new standing generation for sessions created afterwards; an unreadable composition yields `undefined`, which serves the generation already mounted rather than failing the session.',
+        parameters: [{ name: 'preset', description: 'a preset this source listed.' }],
+        returns: 'the stamp, or `undefined` when the composition cannot be read.',
+      },
+      {
+        signature: 'abstract composition(preset: AgentPreset): Promise<PresetComposition>',
+        description: 'The rows to mount, the stamp they were read under, and the base URL relative row specifiers resolve against.',
+        parameters: [{ name: 'preset', description: 'a preset this source listed.' }],
+        returns: 'the composition.',
+        throws: ['when the composition cannot be read or is not a list of rows.'],
+      },
+      {
+        signature: 'abstract read(preset: AgentPreset): Promise<string>',
+        description: 'The composition\'s source text, for the authoring read.',
+        parameters: [{ name: 'preset', description: 'a preset this source listed.' }],
+        returns: 'the text exactly as stored.',
+      },
+      {
+        signature: 'abstract copy(source: AgentPreset, id: string, name?: string): Promise<void>',
+        description: 'Create a locally authored preset by copying an existing one whole.',
+        parameters: [{ name: 'source', description: 'the preset the copy starts from; any trust is accepted.' }, { name: 'id', description: 'the new preset\'s id.' }, { name: 'name', description: 'display name for the copy; absent falls back to the id.' }],
+        throws: ['when the id is unusable or already occupied, or the source is not authorable.'],
+      },
+      {
+        signature: 'abstract remove(preset: AgentPreset): Promise<void>',
+        description: 'Delete a locally authored preset.',
+        parameters: [{ name: 'preset', description: 'a preset this source listed.' }],
+        throws: ['when the preset ships with the deployment or is not this source\'s to delete.'],
       },
     ],
   },
@@ -543,6 +587,104 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'cf',
+    summary: 'The `cf` service.',
+    description: 'The `cf` service. Constructed by the host with the live platform handle; never configured from a row.',
+    methods: [
+      {
+        signature: 'binding(name: string): unknown',
+        description: 'Read one binding by name.',
+        parameters: [{ name: 'name', description: 'the binding name from the Worker configuration.' }],
+        returns: 'the binding value; the caller narrows it to the binding type it configured.',
+        throws: ['when the environment has no such binding: a provider configured for a binding the deployment lacks is a misconfiguration.'],
+      },
+      {
+        signature: 'secret(name: string): string | undefined',
+        description: 'Read one secret or plain-text variable by name.',
+        parameters: [{ name: 'name', description: 'the variable name.' }],
+        returns: 'the value, or `undefined` when unset.',
+      },
+      {
+        signature: 'waitUntil(promise: Promise<unknown>): void',
+        description: 'Keep the object alive until a background promise settles.',
+        parameters: [{ name: 'promise', description: 'work that outlives the current request.' }],
+      },
+    ],
+  },
+  {
+    key: 'cfSandbox',
+    summary: 'The `cfSandbox` service: one prepared container handle per tree.',
+    description: 'The `cfSandbox` service: one prepared container handle per tree. `ready` resolves once the workspace root exists and git is configured; adapters await it before their first operation.',
+    methods: [
+      {
+        signature: 'readonly sandbox: ISandbox',
+        description: 'The SDK handle; valid from construction.',
+        parameters: [],
+      },
+      {
+        signature: 'readonly workspaceRoot: string',
+        description: 'Absolute workspace root inside the container.',
+        parameters: [],
+      },
+      {
+        signature: 'readonly environment: Readonly<Record<string, string>>',
+        description: 'The environment every container process launches with: the git identity and token-backed credential helper as `GIT_CONFIG_*` entries, `GH_TOKEN`, and no terminal prompts. Carried per launch, never stored in the container: the platform replaces containers behind the sandbox id, and the SDK\'s stored environment does not survive that either.',
+        parameters: [],
+      },
+      {
+        signature: 'async run( argv: readonly [string, ...string[]], options: { cwd?: string; env?: Record<string, string>; timeoutMs?: number } = {}, ): Promise<{ exitCode: number; stdout: string; stderr: string }>',
+        description: 'Run one command to completion with collected output.',
+        parameters: [{ name: 'argv', description: 'executable and arguments, no shell.' }, { name: 'options', description: 'working directory, environment, and timeout.' }],
+        returns: 'exit code and decoded output.',
+      },
+      {
+        signature: 'async rememberProject(path: string, url: string): Promise<void>',
+        description: 'Record a project\'s clone origin so a replaced container gets it back.',
+        parameters: [{ name: 'path', description: 'absolute project directory under the workspace root.' }, { name: 'url', description: 'the clone URL.' }],
+      },
+      {
+        signature: 'async materialize(): Promise<string[]>',
+        description: 'Clone every remembered project whose directory is missing: the container\'s disk is ephemeral (sleep, replacement), git is the durable copy.',
+        parameters: [],
+        returns: 'the paths cloned by this call.',
+      },
+    ],
+  },
+  {
+    key: 'clientBundleSource',
+    summary: 'Declarations and bytes of web client bundles.',
+    description: 'Declarations and bytes of web client bundles.\n\nVerdicts are permanent for a process: a Loader row that is not a web client package stays one, so the registry caches `resolve` results per row and re-reads only bytes.',
+    methods: [
+      {
+        signature: 'abstract resolve(loaderName: string, baseUrl: string): ResolvedClientBundle | undefined',
+        description: 'The browser package one Loader row contributes, if any.',
+        parameters: [{ name: 'loaderName', description: 'module specifier of the loader row.' }, { name: 'baseUrl', description: 'resolution base of the tree that owns the row.' }],
+        returns: 'the resolved package, or `undefined` when the row resolves to no package root or declares no web client bundle.',
+        throws: ['when the declaration is malformed or names no `./client` export.'],
+      },
+      {
+        signature: 'abstract snapshot(packageName: string, location: string): ClientBundleSnapshot',
+        description: 'The bundle\'s current bytes and the baseline captured before reading them. Synchronous because the activation scan that hashes every bundle runs inside plugin construction.',
+        parameters: [{ name: 'packageName', description: 'the owning package, for the absent-bundle diagnostic.' }, { name: 'location', description: 'a locator {@link resolve} returned.' }],
+        returns: 'the bundle and its baseline.',
+        throws: ['{MissingClientBundleError} when the bundle is absent.'],
+      },
+      {
+        signature: 'abstract readSourceMap(location: string): ClientSourceMapSnapshot | undefined',
+        description: 'The bundle\'s authored source map.',
+        parameters: [{ name: 'location', description: 'a locator {@link resolve} returned.' }],
+        returns: 'the map, or `undefined` when the source has none.',
+        throws: ['when a present map is not a regular Source Map v3 object.'],
+      },
+      {
+        signature: 'abstract watchPath(location: string): string | undefined',
+        description: 'The path a rebuild watcher polls for this bundle.',
+        parameters: [{ name: 'location', description: 'a locator {@link resolve} returned.' }],
+        returns: 'the absolute path, or `undefined` when no file backs the bundle.',
+      },
+    ],
+  },
+  {
     key: 'clientModules',
     summary: 'The web plugin table service: incremental `dsh.client` scan + wire composition + bundle route + index injection rows.',
     description: 'The web plugin table service: incremental `dsh.client` scan + wire composition + bundle route + index injection rows. Construction runs the activation scan synchronously — a malformed declaration or missing bundle among the already-loaded entries aggregates into one loud throw (FAILED fiber; the boot activation audit reports it).',
@@ -555,9 +697,9 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'clientPath(id: string): string | undefined',
-        description: 'Absolute path of an entry\'s client bundle.',
+        description: 'Path a rebuild watcher polls for an entry\'s client bundle.',
         parameters: [{ name: 'id', description: 'entry id (package name).' }],
-        returns: 'the path, or undefined for an unknown id.',
+        returns: 'the path, or undefined for an unknown id or a source with no file behind the bundle.',
       },
       {
         signature: 'artifactBaseline(id: string): ClientArtifactBaseline | undefined',
@@ -572,15 +714,15 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the new rev, or undefined for an unknown id.',
       },
       {
-        signature: 'onRebuilt(listener: (id: string, rev: string) => void): () => void',
-        description: 'Subscribe to bundle rebuilds; fires only when the re-hash changed the rev.',
-        parameters: [{ name: 'listener', description: 'receives the entry id and its new bundle rev.' }],
-        returns: 'the unsubscriber.',
-      },
-      {
         signature: 'onGraphChanged(listener: () => void): () => void',
         description: 'Fires after any flush that recomposed the graph (row added/removed, or a rebuilt rev change). Pull model: listeners re-read graph.',
         parameters: [{ name: 'listener', description: 'notified with no payload.' }],
+        returns: 'the unsubscriber.',
+      },
+      {
+        signature: 'onRebuilt(listener: (id: string, rev: string) => void): () => void',
+        description: 'Subscribe to bundle rebuilds; fires only when the re-hash changed the rev.',
+        parameters: [{ name: 'listener', description: 'receives the entry id and its new bundle rev.' }],
         returns: 'the unsubscriber.',
       },
     ],
@@ -914,6 +1056,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'List direct children of a directory in stable name order. Returns resolved child targets plus cheap metadata only; never reads file contents.',
         parameters: [{ name: 'target', description: 'the resolved directory target.' }, { name: 'signal', description: 'aborts the listing.' }],
         returns: 'one entry per direct child, in stable name order.',
+      },
+      {
+        signature: 'abstract ensureDirectory(path: string, opts?: { cwd?: string; signal?: AbortSignal }): Promise<FsTarget>',
+        description: 'Ensure a directory exists, creating missing ancestors, and resolve it. An existing directory is left as it is; an existing non-directory rejects.',
+        parameters: [{ name: 'path', description: 'the directory path; relative paths resolve against `opts.cwd`.' }, { name: 'opts', description: 'optional cwd override and cancellation signal.' }],
+        returns: 'the directory\'s resolved target.',
       },
       {
         signature: 'abstract writeText( target: FsTarget, content: string, expected?: FsWriteIntent, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy, ): Promise<FsWriteOutcome>',
@@ -2600,6 +2748,19 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'typertArtifacts',
+    summary: 'Where a package\'s typert artifact comes from.',
+    description: 'Where a package\'s typert artifact comes from. Absent, the loader resolves each package\'s `./typert` export from `ctx.baseUrl` through Node resolution; a host whose artifact already carries every contribution (a platform Worker) mounts a table-backed source instead.',
+    methods: [
+      {
+        signature: 'abstract load(packageName: string): Promise<Record<string, unknown> | undefined>',
+        description: 'Load one package\'s artifact module.',
+        parameters: [{ name: 'packageName', description: 'the row\'s package name.' }],
+        returns: 'the artifact module namespace (its `TYPERT` export is validated by the loader), or `undefined` when the package contributes no types.',
+      },
+    ],
+  },
+  {
     key: 'typertGateway',
     summary: 'Resolve strict generated definitions or conservative SRC markers against current Cordis Services and Typert providers.',
     description: 'Resolve strict generated definitions or conservative SRC markers against current Cordis Services and Typert providers.',
@@ -2696,8 +2857,8 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
   },
   {
     key: 'webServer',
-    summary: 'The browser HTTP carrier service.',
-    description: 'The browser HTTP carrier service. Activation listens immediately. Route registration order does not affect requests because configured named routes must be distinct, and the fallback handler answers anything not yet claimed during startup with 404 until its owner registers. A listen failure rejects initialization, and the boot process reports the failed fiber.',
+    summary: 'The web carrier: route registries plus their dispatch.',
+    description: 'The web carrier: route registries plus their dispatch. Route registration order does not affect requests because configured named routes must be distinct, and the fallback handler answers anything not yet claimed during startup with 404 until its owner registers. A provider activates the carrier (binds, or attaches to a platform entry) and forwards every request to fetch; its initialization failure rejects the fiber.',
     methods: [
       {
         signature: 'register(route: WebRoute): () => void',
@@ -2706,15 +2867,15 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the disposer removing the route.',
       },
       {
-        signature: 'registerUpgrade(route: WebUpgradeRoute): () => void',
-        description: 'Register an exact-path HTTP upgrade route. Duplicate paths throw because one socket can have only one protocol owner.',
-        parameters: [{ name: 'route', description: 'pathname and handler owning negotiation plus socket use.' }],
+        signature: 'registerUpgrade(route: WebSocketRoute): () => void',
+        description: 'Register an exact-path WebSocket route. Duplicate paths throw because one socket can have only one protocol owner.',
+        parameters: [{ name: 'route', description: 'pathname, the pre-handshake decision, and the socket owner.' }],
         returns: 'the disposer removing the route.',
       },
       {
-        signature: 'registerFallback(handler: WebRoute[\'handler\']): () => void',
+        signature: 'registerFallback(handler: WebRequestHandler): () => void',
         description: 'Claim the fallback seat: the handler answering every request no named route matches (the SPA dist server in the shipped Web composition). One owner only — a second registration throws, because two fallbacks cannot compose.',
-        parameters: [{ name: 'handler', description: 'owns the full response lifecycle of unmatched requests.' }],
+        parameters: [{ name: 'handler', description: 'produces the response for unmatched requests.' }],
         returns: 'the disposer releasing the seat.',
       },
       {
@@ -2722,6 +2883,18 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Register a raw-HTML index transform, the escape hatch for markup no IndexInjection row expresses: renderIndex applies taps in registration order after rendering the structured rows.',
         parameters: [{ name: 'transform', description: 'pure html-to-html function.' }],
         returns: 'the disposer removing the transform.',
+      },
+      {
+        signature: 'async fetch(request: Request): Promise<Response>',
+        description: 'Dispatch one HTTP request: the exact table, then longest-prefix over the prefix table, then the fallback seat, then 404. A handler\'s rejection propagates to the provider, which answers it as a per-request failure.',
+        parameters: [{ name: 'request', description: 'the request as the provider received it.' }],
+        returns: 'the matched handler\'s response.',
+      },
+      {
+        signature: 'upgradeRoute(pathname: string): WebSocketRoute | undefined',
+        description: 'The WebSocket route owning a pathname, for the provider\'s handshake.',
+        parameters: [{ name: 'pathname', description: 'decoded request pathname.' }],
+        returns: 'the route, or undefined when no owner is registered.',
       },
       {
         signature: 'applyIndexTaps(html: string): string',
@@ -3597,6 +3770,18 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ClientArtifactBaseline',
     declaration: 'export interface ClientArtifactBaseline {\n    readonly path: string;\n    readonly mtimeMs: number;\n    readonly size: number;\n}',
+  },
+  {
+    name: 'ClientBundleDeclaration',
+    declaration: 'export interface ClientBundleDeclaration {\n    inject?: string[];\n    external: string[];\n    immediately: boolean;\n}',
+  },
+  {
+    name: 'ClientBundleSnapshot',
+    declaration: 'export interface ClientBundleSnapshot {\n    bundle: Buffer;\n    baseline: ClientArtifactBaseline;\n}',
+  },
+  {
+    name: 'ClientSourceMapSnapshot',
+    declaration: 'export interface ClientSourceMapSnapshot {\n    body: Buffer;\n    parsed: Record<string, unknown>;\n}',
   },
   {
     name: 'CodeBindingErrorClass',
@@ -4511,6 +4696,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type PrepareSessionOptions = (CreateSessionOptions & {\n    readonly seedSource?: undefined;\n}) | RestoredSessionOptions;',
   },
   {
+    name: 'PresetComposition',
+    declaration: 'export interface PresetComposition {\n    rows: EntryOptions[];\n    stamp: string;\n    baseUrl?: string;\n}',
+  },
+  {
     name: 'PresetOption',
     declaration: 'export interface PresetOption {\n    value: string;\n    name: string;\n    description?: string;\n}',
   },
@@ -4633,6 +4822,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ResolvedAlwaysRetryPolicy',
     declaration: 'export interface ResolvedAlwaysRetryPolicy extends ResolvedRetryBackoff {\n    readonly mode: \'always\';\n}',
+  },
+  {
+    name: 'ResolvedClientBundle',
+    declaration: 'export interface ResolvedClientBundle {\n    packageName: string;\n    declaration: ClientBundleDeclaration;\n    location: string;\n}',
   },
   {
     name: 'ResolvedCredential',
@@ -5959,12 +6152,16 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type WebhookSourceId = Branded<\'WebhookSourceId\'>;',
   },
   {
+    name: 'WebRequestHandler',
+    declaration: 'export type WebRequestHandler = (request: Request) => Response | Promise<Response>;',
+  },
+  {
     name: 'WebResultView',
     declaration: 'export type WebResultView = WebSearchResultView | WebFetchResultView;',
   },
   {
     name: 'WebRoute',
-    declaration: 'export interface WebRoute {\n    kind: WebRouteKind;\n    path: string;\n    handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>;\n}',
+    declaration: 'export interface WebRoute {\n    kind: WebRouteKind;\n    path: string;\n    handler: WebRequestHandler;\n}',
   },
   {
     name: 'WebRouteKind',
@@ -5991,12 +6188,16 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface WebSearchSource {\n    readonly url: string;\n    readonly title?: string;\n    readonly snippet?: string;\n    readonly publishedAt?: string;\n}',
   },
   {
-    name: 'WebSource',
-    declaration: 'export interface WebSource {\n    url: string;\n    title?: string;\n    snippet?: string;\n    publishedAt?: string;\n}',
+    name: 'WebServerSocket',
+    declaration: 'export interface WebServerSocket {\n    readonly readyState: number;\n    send(data: string | ArrayBuffer | ArrayBufferView): void;\n    close(code?: number, reason?: string): void;\n    ping?(): void;\n    addEventListener(type: \'message\', listener: (event: {\n        data: unknown;\n    }) => void): void;\n    addEventListener(type: \'close\' | \'error\', listener: () => void): void;\n}',
   },
   {
-    name: 'WebUpgradeRoute',
-    declaration: 'export interface WebUpgradeRoute {\n    path: string;\n    handler: (req: IncomingMessage, socket: Duplex, head: Buffer) => void | Promise<void>;\n}',
+    name: 'WebSocketRoute',
+    declaration: 'export interface WebSocketRoute {\n    path: string;\n    authorize?: (request: Request) => Response | undefined;\n    open: (request: Request, socket: WebServerSocket) => void | Promise<void>;\n}',
+  },
+  {
+    name: 'WebSource',
+    declaration: 'export interface WebSource {\n    url: string;\n    title?: string;\n    snippet?: string;\n    publishedAt?: string;\n}',
   },
   {
     name: 'WorkflowAgentEndInfo',

@@ -110,6 +110,54 @@ interface ClientArtifactBaseline {
 
 Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnpm run verify-cordis-catalog` in doc-sync; regenerate with `pnpm run gen-cordis-catalog`) — the language sides differ only in locale-specific paired document paths. Signature blocks use a `ts cordis-catalog` fence and keep the original source JSDoc; dispatch modes are defined in the [primer](../cordis-primer.zh.md#dispatch-modes), and the framework-inherited `ctx` API lives in [cordis-api/inherited.md](../cordis-api/inherited.md).
 
+<a id="ctxclientbundlesource--clientbundlesource-abstract-seam"></a>
+
+### `ctx.clientBundleSource` — `ClientBundleSource` (abstract seam)
+
+Declarations and bytes of web client bundles.
+
+Verdicts are permanent for a process: a Loader row that is not a web client package stays one, so the registry caches `resolve` results per row and re-reads only bytes.
+
+```ts cordis-catalog
+/**
+ * The browser package one Loader row contributes, if any.
+ * @param loaderName - module specifier of the loader row.
+ * @param baseUrl - resolution base of the tree that owns the row.
+ * @returns the resolved package, or `undefined` when the row resolves to no
+ * package root or declares no web client bundle.
+ * @throws when the declaration is malformed or names no `./client` export.
+ */
+abstract resolve(loaderName: string, baseUrl: string): ResolvedClientBundle | undefined
+
+/**
+ * The bundle's current bytes and the baseline captured before reading them.
+ * Synchronous because the activation scan that hashes every bundle runs
+ * inside plugin construction.
+ * @param packageName - the owning package, for the absent-bundle diagnostic.
+ * @param location - a locator {@link resolve} returned.
+ * @returns the bundle and its baseline.
+ * @throws {MissingClientBundleError} when the bundle is absent.
+ */
+abstract snapshot(packageName: string, location: string): ClientBundleSnapshot
+
+/**
+ * The bundle's authored source map.
+ * @param location - a locator {@link resolve} returned.
+ * @returns the map, or `undefined` when the source has none.
+ * @throws when a present map is not a regular Source Map v3 object.
+ */
+abstract readSourceMap(location: string): ClientSourceMapSnapshot | undefined
+
+/**
+ * The path a rebuild watcher polls for this bundle.
+ * @param location - a locator {@link resolve} returned.
+ * @returns the absolute path, or `undefined` when no file backs the bundle.
+ */
+abstract watchPath(location: string): string | undefined
+```
+
+Source: [`packages/client/modules/src/bundle-source.ts`](../../packages/client/modules/src/bundle-source.ts)
+
 <a id="ctxclientmodules--clientmoduleregistry"></a>
 
 ### `ctx.clientModules` — `ClientModuleRegistry`
@@ -124,9 +172,9 @@ The web plugin table service: incremental `dsh.client` scan + wire composition +
 graph(): WebBootGraph
 
 /**
- * Absolute path of an entry's client bundle.
+ * Path a rebuild watcher polls for an entry's client bundle.
  * @param id - entry id (package name).
- * @returns the path, or undefined for an unknown id.
+ * @returns the path, or undefined for an unknown id or a source with no file behind the bundle.
  */
 clientPath(id: string): string | undefined
 
@@ -149,19 +197,19 @@ artifactBaseline(id: string): ClientArtifactBaseline | undefined
 rebuilt(id: string): string | undefined
 
 /**
- * Subscribe to bundle rebuilds; fires only when the re-hash changed the rev.
- * @param listener - receives the entry id and its new bundle rev.
- * @returns the unsubscriber.
- */
-onRebuilt(listener: (id: string, rev: string) => void): () => void
-
-/**
  * Fires after any flush that recomposed the graph (row added/removed, or a
  * rebuilt rev change). Pull model: listeners re-read {@link graph}.
  * @param listener - notified with no payload.
  * @returns the unsubscriber.
  */
 onGraphChanged(listener: () => void): () => void
+
+/**
+ * Subscribe to bundle rebuilds; fires only when the re-hash changed the rev.
+ * @param listener - receives the entry id and its new bundle rev.
+ * @returns the unsubscriber.
+ */
+onRebuilt(listener: (id: string, rev: string) => void): () => void
 ```
 
 Source: [`packages/client/modules/src/index.ts`](../../packages/client/modules/src/index.ts)

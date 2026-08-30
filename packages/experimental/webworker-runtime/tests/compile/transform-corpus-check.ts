@@ -38,6 +38,8 @@ const BASELINE_EXEMPT: ReadonlyMap<string, string> = new Map([
   ['packages/client/web/lib/index.js', 'imports .css, which bare Node cannot load'],
   ['packages/subprocess/win32-process/lib/index.js', 'koffi type-name collision on a second load'],
   ['packages/test-support/client-runtime/lib/index.js', "needs vitest's internal state"],
+  ['packages/cf/cf-sandbox/lib/index.js', "imports cloudflare:workers, a scheme only workerd resolves"],
+  ['packages/cf/fs-cf-sandbox/lib/index.js', "imports cloudflare:workers, a scheme only workerd resolves"],
 ])
 
 let failures = 0

@@ -22,7 +22,19 @@ import type { FileSystem } from '@deepseek-ai/dsh-fs'
 export async function realpathDirectory(fs: FileSystem, path: string): Promise<string> {
   const target = await fs.resolve(path)
   const info = await fs.stat(target)
-  if (info === undefined) throw new Error(`ENOENT: no such directory, '${path}'`)
-  if (info.type !== 'directory') throw new Error(`cannot use '${fs.processPath(target)}': path is not a directory`)
+  if (info === undefined) {
+    // Carries `code`, not just the message: callers distinguish a missing path
+    // from a non-directory, and the node:fs errno this replaced carried one.
+    throw Object.assign(
+      new Error(`ENOENT: no such directory, '${path}'`),
+      { code: 'ENOENT' },
+    )
+  }
+  if (info.type !== 'directory') {
+    throw Object.assign(
+      new Error(`cannot use '${fs.processPath(target)}': path is not a directory`),
+      { code: 'ENOTDIR' },
+    )
+  }
   return fs.processPath(target)
 }

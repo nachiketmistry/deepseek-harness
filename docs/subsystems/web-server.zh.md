@@ -60,11 +60,11 @@ interface Config {
 
 Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnpm run verify-cordis-catalog` in doc-sync; regenerate with `pnpm run gen-cordis-catalog`) — the language sides differ only in locale-specific paired document paths. Signature blocks use a `ts cordis-catalog` fence and keep the original source JSDoc; dispatch modes are defined in the [primer](../cordis-primer.zh.md#dispatch-modes), and the framework-inherited `ctx` API lives in [cordis-api/inherited.md](../cordis-api/inherited.md).
 
-<a id="ctxwebserver--webserver"></a>
+<a id="ctxwebserver--webserver-abstract-seam"></a>
 
-### `ctx.webServer` — `WebServer`
+### `ctx.webServer` — `WebServer` (abstract seam)
 
-The browser HTTP carrier service. Activation listens immediately. Route registration order does not affect requests because configured named routes must be distinct, and the fallback handler answers anything not yet claimed during startup with 404 until its owner registers. A listen failure rejects initialization, and the boot process reports the failed fiber.
+The web carrier: route registries plus their dispatch. Route registration order does not affect requests because configured named routes must be distinct, and the fallback handler answers anything not yet claimed during startup with 404 until its owner registers. A provider activates the carrier (binds, or attaches to a platform entry) and forwards every request to fetch; its initialization failure rejects the fiber.
 
 ```ts cordis-catalog
 /**
@@ -76,22 +76,22 @@ The browser HTTP carrier service. Activation listens immediately. Route registra
 register(route: WebRoute): () => void
 
 /**
- * Register an exact-path HTTP upgrade route. Duplicate paths throw because
+ * Register an exact-path WebSocket route. Duplicate paths throw because
  * one socket can have only one protocol owner.
- * @param route - pathname and handler owning negotiation plus socket use.
+ * @param route - pathname, the pre-handshake decision, and the socket owner.
  * @returns the disposer removing the route.
  */
-registerUpgrade(route: WebUpgradeRoute): () => void
+registerUpgrade(route: WebSocketRoute): () => void
 
 /**
  * Claim the fallback seat: the handler answering every request no named
  * route matches (the SPA dist server in the shipped Web composition). One
  * owner only — a second registration throws, because two fallbacks cannot
  * compose.
- * @param handler - owns the full response lifecycle of unmatched requests.
+ * @param handler - produces the response for unmatched requests.
  * @returns the disposer releasing the seat.
  */
-registerFallback(handler: WebRoute['handler']): () => void
+registerFallback(handler: WebRequestHandler): () => void
 
 /**
  * Register a raw-HTML index transform, the escape hatch for markup no
@@ -101,6 +101,22 @@ registerFallback(handler: WebRoute['handler']): () => void
  * @returns the disposer removing the transform.
  */
 tapIndex(transform: (html: string) => string): () => void
+
+/**
+ * Dispatch one HTTP request: the exact table, then longest-prefix over the
+ * prefix table, then the fallback seat, then 404. A handler's rejection
+ * propagates to the provider, which answers it as a per-request failure.
+ * @param request - the request as the provider received it.
+ * @returns the matched handler's response.
+ */
+async fetch(request: Request): Promise<Response>
+
+/**
+ * The WebSocket route owning a pathname, for the provider's handshake.
+ * @param pathname - decoded request pathname.
+ * @returns the route, or undefined when no owner is registered.
+ */
+upgradeRoute(pathname: string): WebSocketRoute | undefined
 
 /**
  * Run an index.html body through the registered taps in registration order

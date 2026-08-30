@@ -157,6 +157,9 @@ export class WorkspaceRegistry extends Service {
   // drop the parameter with its @param clause and the `create(path, title?)`
   // lines in this package's README pair.
   async create(path: string, title?: string): Promise<Workspace> {
+    // Before the filesystem read: an unstarted registry has no composed `fs`,
+    // and the not-started diagnostic is the one the caller can act on.
+    this.requireTable()
     const canonical = await realpathDirectory(this.ctx.fs, path)
     return await this.enqueueOperation(() => this.createCanonical(canonical, title))
   }

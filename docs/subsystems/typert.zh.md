@@ -308,6 +308,24 @@ Types: [TypertContribution](invariants.zh.md) · [TypertFace](invariants.zh.md) 
 
 Source: [`packages/typert/registry/src/service.ts`](../../packages/typert/registry/src/service.ts)
 
+<a id="ctxtypertartifacts--typertartifactsource-abstract-seam"></a>
+
+### `ctx.typertArtifacts` — `TypertArtifactSource` (abstract seam)
+
+Where a package's typert artifact comes from. Absent, the loader resolves each package's `./typert` export from `ctx.baseUrl` through Node resolution; a host whose artifact already carries every contribution (a platform Worker) mounts a table-backed source instead.
+
+```ts cordis-catalog
+/**
+ * Load one package's artifact module.
+ * @param packageName - the row's package name.
+ * @returns the artifact module namespace (its `TYPERT` export is validated
+ * by the loader), or `undefined` when the package contributes no types.
+ */
+abstract load(packageName: string): Promise<Record<string, unknown> | undefined>
+```
+
+Source: [`packages/typert/loader/src/index.ts`](../../packages/typert/loader/src/index.ts)
+
 <a id="ctxtypertgateway--typertgatewayservice"></a>
 
 ### `ctx.typertGateway` — `TypertGatewayService`

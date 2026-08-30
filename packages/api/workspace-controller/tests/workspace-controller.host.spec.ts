@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import Storage from '@deepseek-ai/dsh-storage'
+import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { TypertRemoteFailure } from '@deepseek-ai/dsh-typert-protocol'
 import WorkspaceRegistry from '@deepseek-ai/dsh-workspace'
@@ -36,6 +37,8 @@ async function harness() {
   const ctx = new Context()
   roots.push(ctx)
   await ctx.plugin(SessionStore)
+  // The registry canonicalizes paths through the composed filesystem.
+  await ctx.plugin(LocalFileSystem, { cwd: '/' })
   await ctx.plugin(Storage)
   ctx.storage.backend.register('memory', new MemoryStorageBackend())
   const storageDomain = new DomainFacility(ctx, { backend: 'memory', routes: {} })

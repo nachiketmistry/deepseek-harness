@@ -120,7 +120,7 @@ describe('web app browser startup', () => {
     await ctx.loader.await()
     await opened
 
-    expect(openedUrl).toBe(`http://127.0.0.1:${String(ctx.webServer.port)}/?token=fixture-token`)
+    expect(openedUrl).toBe(`http://127.0.0.1:${String(ctx.webServer.address!.port)}/?token=fixture-token`)
     expect(openedStatus).toBe(200)
   })
 })

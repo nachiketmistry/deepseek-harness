@@ -12,6 +12,8 @@ import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
+// Type-only: resolves the Loader whose module resolution this source reuses.
+import type {} from '@deepseek-ai/cordis-plugin-loader'
 import {
   ClientBundleSource,
   MissingClientBundleError,

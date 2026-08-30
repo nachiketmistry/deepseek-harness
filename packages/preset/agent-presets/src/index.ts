@@ -125,7 +125,7 @@ export { AgentPresetSource, type PresetComposition } from './source.ts'
 export { InvalidPresetIdError, PresetExistsError, PresetNotWritableError } from './preset.ts'
 export { agentPresetProjectionDefinition } from './session.ts'
 export { PresetLockedError, PresetMountError, UnknownPresetError } from './preset.ts'
-export type { AgentPreset, Config, PresetRoot, PresetTrust } from './preset.ts'
+export type { AgentPreset, Config, PresetTrust } from './preset.ts'
 export { PRESET_ID } from './preset.ts'
 // Shared with the composed source: health resolves every row from the same
 // base the mount imports it from, so both sides must classify alike.

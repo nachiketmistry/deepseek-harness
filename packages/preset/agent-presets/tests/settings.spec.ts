@@ -4,16 +4,14 @@
  * so a person can change which preset new sessions get without a restart.
  */
 
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
-import Include from '@deepseek-ai/cordis-plugin-include'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
-import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
@@ -21,10 +19,11 @@ import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import FileSettingsProvider from '@deepseek-ai/dsh-settings-file'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { describe, expect, it } from 'vitest'
-import AgentPresets, { COMPOSITION_FILE, SETTINGS_NAMESPACE } from '@deepseek-ai/dsh-agent-presets'
+import AgentPresets, { SETTINGS_NAMESPACE } from '@deepseek-ai/dsh-agent-presets'
+import { fixturePreset, MemoryPresetSource, toolPreset, type MemoryPreset } from './memory-source.ts'
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
-const ROOTS = [{ path: join(FIXTURES, 'system'), trust: 'system' as const }]
+const SYSTEM = join(FIXTURES, 'system')
 const NS = settingsNamespace(SETTINGS_NAMESPACE)
 
 /**
@@ -32,7 +31,7 @@ const NS = settingsNamespace(SETTINGS_NAMESPACE)
  * the provider's own handle, so a test can take it away the way a reload does.
  */
 async function harness(
-  extraRoots: readonly { path: string; trust: 'system' | 'user' }[] = [],
+  extra: readonly Omit<MemoryPreset, 'stamp'>[] = [],
 ): Promise<{ ctx: Context; settingsFile: string; settingsFiber: { dispose: () => unknown } }> {
   const home = await mkdtemp(join(tmpdir(), 'dsh-preset-settings-'))
   const settingsFile = join(home, 'settings.yaml')
@@ -41,17 +40,18 @@ async function harness(
   const ctx = new Context()
   ctx.baseUrl = pathToFileURL(FIXTURES).href + '/'
   await ctx.plugin(Loader)
-  ctx.loader.builtins.include = Include
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(SessionStore)
-  await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(SystemPrompt, { persona: '' })
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(AgentRegistry)
   await ctx.plugin(AgentLoop, { agents: [] })
   const settingsFiber = ctx.plugin(FileSettingsProvider, { path: settingsFile, watch: false })
   await settingsFiber
-  await ctx.plugin(AgentPresets, { default: 'standard', roots: [...ROOTS, ...extraRoots], includeShippedRoot: false, includeUserRoot: false })
+  await ctx.plugin(MemoryPresetSource, {
+    entries: [fixturePreset(SYSTEM, 'standard', 'system'), fixturePreset(SYSTEM, 'minimal', 'system'), ...extra],
+  })
+  await ctx.plugin(AgentPresets, { default: 'standard' })
   return { ctx, settingsFile, settingsFiber }
 }
 
@@ -119,13 +119,7 @@ describe('the default preset as a user setting', () => {
   })
 
   it('clears a user default it has just deleted', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-preset-authored-'))
-    await mkdir(join(root, 'mine'))
-    await writeFile(
-      join(root, 'mine', COMPOSITION_FILE),
-      `- id: only\n  name: ${join(FIXTURES, 'plugins', 'contribute.js')}\n  config:\n    tool: only\n`,
-    )
-    const { ctx } = await harness([{ path: root, trust: 'user' as const }])
+    const { ctx } = await harness([toolPreset('mine', join(FIXTURES, 'plugins', 'contribute.js'), 'only')])
     await ctx.settings.update(NS, { default: 'mine' })
     expect(ctx.agentPresets.defaultId).toBe('mine')
 

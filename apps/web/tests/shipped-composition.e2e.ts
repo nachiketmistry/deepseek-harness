@@ -79,7 +79,7 @@ afterEach(async () => {
 it('assembles the shipped Web transport, catalog, guidance, and defaults', async () => {
   scaffold = await launchWebScaffold({ deepSeekMissingCredential: true })
   const ctx = scaffold.ctx
-  const index = await fetch(`http://127.0.0.1:${String(ctx.webServer.port)}`, {
+  const index = await fetch(`http://127.0.0.1:${String(ctx.webServer.address!.port)}`, {
     headers: { 'accept-encoding': 'gzip' },
   })
   expect(index.headers.get('content-encoding')).toBe('gzip')

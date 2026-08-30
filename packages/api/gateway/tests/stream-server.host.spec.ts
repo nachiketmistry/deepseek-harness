@@ -1,7 +1,7 @@
 import { once } from 'node:events'
 import { createServer, type Server } from 'node:http'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import WebSocket from 'ws'
+import WebSocket, { WebSocketServer } from 'ws'
 import {
   RemoteStreamMuxServer,
   type RemoteStreamFailureMapper,
@@ -182,7 +182,9 @@ describe('Remote stream mux server carrier lifecycle', () => {
     running.delete(entry)
     await closed
     await didReturn
-    await expect(entry.mux.close()).rejects.toThrow()
+    // Closing again is a no-op: the mux owns sockets, not a listening server,
+    // so there is no second resource to fail on.
+    await expect(entry.mux.close()).resolves.toBeUndefined()
     await closeHttp(entry.http)
   })
 })
@@ -196,7 +198,12 @@ const mapFailure: RemoteStreamFailureMapper = error => ({
 async function startMux(open: RemoteStreamOpener, heartbeatIntervalMs = 30_000): Promise<RunningMux> {
   const mux = new RemoteStreamMuxServer(open, mapFailure, heartbeatIntervalMs)
   const http = createServer()
-  http.on('upgrade', (request, socket, head) => { mux.handleUpgrade(request, socket, head) })
+  // The carrier owns the ws handshake and hands the mux an accepted socket;
+  // this stands in for that half.
+  const acceptor = new WebSocketServer({ noServer: true })
+  http.on('upgrade', (request, socket, head) => {
+    acceptor.handleUpgrade(request, socket, head, (websocket) => { void mux.serve(websocket) })
+  })
   await new Promise<void>((resolve, reject) => {
     http.once('error', reject)
     http.listen(0, '127.0.0.1', () => {

@@ -9,6 +9,8 @@
  */
 
 import { createServer } from 'node:http'
+import { pipeline, Readable } from 'node:stream'
+import { createGzip } from 'node:zlib'
 import type { IncomingMessage, ServerResponse, Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import type { Duplex } from 'node:stream'
@@ -23,6 +25,78 @@ export interface Config {
   host: '127.0.0.1' | '0.0.0.0'
   /** Listen port; zero requests an OS-assigned port. */
   port: number
+  /** Response compression for socket-backed HTTP requests. @default 'none' */
+  compression?: 'none' | 'gzip'
+  /** Gzip DEFLATE level from 0 through 9. @default 1 */
+  compressionLevel?: number
+  /** Minimum known response length eligible for gzip; unknown-length streams are eligible. @default 1024 */
+  compressionThresholdBytes?: number
+}
+
+/** {@link Config} after the schema has filled every default. */
+interface ResolvedConfig extends Config {
+  compression: 'none' | 'gzip'
+  compressionLevel: number
+  compressionThresholdBytes: number
+}
+
+const DEFAULT_COMPRESSION = 'none' as const
+const DEFAULT_COMPRESSION_LEVEL = 1
+const DEFAULT_COMPRESSION_THRESHOLD_BYTES = 1024
+
+/**
+ * Media types worth compressing: text, and the structured formats whose
+ * subtype ends in a text-shaped suffix. Everything else (images, video, fonts,
+ * archives) is already compressed, where a second pass costs CPU and adds bytes.
+ */
+const COMPRESSIBLE = /^text\/|^application\/(?:json|javascript|xml|wasm$|[^;]*\+(?:json|xml|text))/i
+
+/**
+ * Whether one response should be gzipped for one request.
+ * @param request - the request, read for `accept-encoding`.
+ * @param response - the response, read for its type, length, and any existing encoding.
+ * @param thresholdBytes - smallest declared body worth compressing.
+ * @returns whether to wrap the body in gzip.
+ */
+function shouldCompress(request: Request, response: Response, thresholdBytes: number): boolean {
+  if (response.body === null) return false
+  if (response.headers.has('content-encoding')) return false
+  // A `q=0` parameter refuses gzip; anything else naming gzip accepts it.
+  const accepted = request.headers.get('accept-encoding') ?? ''
+  const gzip = /(?:^|,)\s*(?:gzip|\*)\s*(;\s*q=(?<q>[\d.]+))?/i.exec(accepted)
+  if (gzip === null || gzip.groups?.q === '0') return false
+  if (!COMPRESSIBLE.test(response.headers.get('content-type') ?? '')) return false
+  // An undeclared length is a stream: compress it, since the threshold cannot
+  // be judged without buffering the whole body first.
+  const declared = response.headers.get('content-length')
+  return declared === null || Number(declared) >= thresholdBytes
+}
+
+/**
+ * The same response with a gzip body and the headers that describe it.
+ * @param response - the response to wrap.
+ * @param level - zlib compression level.
+ * @returns the gzipped response.
+ */
+function gzipResponse(response: Response, level: number): Response {
+  /* v8 ignore next -- shouldCompress rejects a null body before this is called */
+  if (response.body === null) return response
+  const headers = new Headers(response.headers)
+  headers.set('content-encoding', 'gzip')
+  // The compressed length is unknown until the stream ends, and a stale
+  // declared length would truncate the body at the client.
+  headers.delete('content-length')
+  headers.append('vary', 'accept-encoding')
+  const gzip = createGzip({ level })
+  const body = Readable.toWeb(pipeline(
+    Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]),
+    gzip,
+    () => {
+      // pipeline's callback is required; a failure destroys the streams and
+      // surfaces as the response body erroring, which the writer already owns.
+    },
+  )) as ReadableStream<Uint8Array>
+  return new Response(body, { status: response.status, statusText: response.statusText, headers })
 }
 
 /**
@@ -141,6 +215,9 @@ export class NodeWebServer extends WebServer {
   static Config: z<Config> = z.object({
     host: z.union([z.const('127.0.0.1'), z.const('0.0.0.0')]).required(),
     port: z.natural().max(65535).required(),
+    compression: z.union([z.const('none'), z.const('gzip')]).default(DEFAULT_COMPRESSION),
+    compressionLevel: z.number().step(1).min(0).max(9).default(DEFAULT_COMPRESSION_LEVEL),
+    compressionThresholdBytes: z.natural().default(DEFAULT_COMPRESSION_THRESHOLD_BYTES),
   })
 
   private readonly upgradedSockets = new Set<Duplex>()
@@ -160,8 +237,14 @@ export class NodeWebServer extends WebServer {
   /** Listen; resolves once the socket is bound (rejection = FAILED fiber). */
   async [Service.init](): Promise<void> {
     const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-      const response = await this.fetch(toFetchRequest(req, res))
-      await writeFetchResponse(response, res)
+      const request = toFetchRequest(req, res)
+      const response = await this.fetch(request)
+      const resolved = this.config as ResolvedConfig
+      const delivered = resolved.compression === 'gzip'
+        && shouldCompress(request, response, resolved.compressionThresholdBytes)
+        ? gzipResponse(response, resolved.compressionLevel)
+        : response
+      await writeFetchResponse(delivered, res)
     }
     // Last-resort guard: handle() rejecting would otherwise be an unhandled
     // rejection killing the process on one malformed request (bad %-escape,

@@ -1,11 +1,7 @@
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
-import Include from '@deepseek-ai/cordis-plugin-include'
-import Group from '@deepseek-ai/cordis-plugin-group'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
@@ -14,11 +10,11 @@ import AgentRegistry, { assembleContextFor, type Agent } from '@deepseek-ai/dsh-
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import AgentPresets, {
-  COMPOSITION_FILE, leakedServices, livePresetMounts, mountPreset, PresetMountError, serviceForAgent,
+  leakedServices, livePresetMounts, mountPreset, PresetMountError, serviceForAgent,
 } from '@deepseek-ai/dsh-agent-presets'
-import type { Config } from '@deepseek-ai/dsh-agent-presets'
 import type {} from '@deepseek-ai/dsh-agent-presets/types'
 import { bindScopeParent, createScope, scopeOf } from '@deepseek-ai/dsh-scope'
+import { fixturePreset, MemoryPresetSource, toolPreset, type MemoryPreset } from './memory-source.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -28,36 +24,46 @@ declare module '@deepseek-ai/cordis' {
 }
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
-const ROOTS = [
-  { path: join(FIXTURES, 'system'), trust: 'system' as const },
-  { path: join(FIXTURES, 'user'), trust: 'user' as const },
-]
+const SYSTEM = join(FIXTURES, 'system')
+const USER = join(FIXTURES, 'user')
+const CONTRIBUTE = join(FIXTURES, 'plugins', 'contribute.js')
+
+/** The committed fixture presets as one in-memory table, first root winning `standard`. */
+function fixtureTable(): Omit<MemoryPreset, 'stamp'>[] {
+  return [
+    fixturePreset(SYSTEM, 'standard', 'system'),
+    fixturePreset(SYSTEM, 'minimal', 'system'),
+    ...['broken', 'isolated', 'late', 'leaky', 'pending', 'two-broken'].map(id => fixturePreset(USER, id, 'user')),
+    { id: 'not-a-preset', trust: 'user', rows: [], broken: 'the composition file agent.cordis.yml is missing — the directory still occupies the id; delete it or restore the file' },
+  ]
+}
 
 /**
  * A composition carrying the registries a preset contributes to, plus the
- * preset roster.
- * @param roster - roster config, defaulting to the fixture roots.
+ * preset roster over an in-memory source.
+ * @param entries - the source table, defaulting to the fixture presets.
+ * @param defaultId - the composition default.
  * @returns the booted context.
  */
-async function harness(roster: Config = { default: 'standard', roots: ROOTS, includeShippedRoot: false, includeUserRoot: false }): Promise<Context> {
+async function harness(entries: Omit<MemoryPreset, 'stamp'>[] = fixtureTable(), defaultId = 'standard'): Promise<Context> {
   const ctx = new Context()
   ctx.baseUrl = pathToFileURL(FIXTURES).href + '/'
   await ctx.plugin(Loader)
-  ctx.loader.builtins.include = Include
-  // A preset outside this workspace cannot resolve `cordis-plugin-group` by
-  // name, so the app registers it as a builtin; the fixtures compose the same
-  // way real presets do, which needs it here too.
-  ctx.loader.builtins.group = Group
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(SessionStore)
   await ctx.plugin(SystemPrompt, { persona: '' })
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(AgentRegistry)
   await ctx.plugin(AgentLoop, { agents: [] })
-  await ctx.plugin(AgentPresets, roster)
+  await ctx.plugin(MemoryPresetSource, { entries })
+  await ctx.plugin(AgentPresets, { default: defaultId })
   return ctx
 }
 
+/** The memory source behind a harness, for edits and deletions mid-test. */
+const sourceOf = (ctx: Context): MemoryPresetSource => ctx.agentPresetSource as MemoryPresetSource
+
+/** Create one agent composed from `presetId`, exactly as a factory `setup` would. */
 async function agentOn(ctx: Context, id: string, presetId?: string): Promise<Agent> {
   const handle = await ctx.agents.create({
     sessionId: SessionId(id),
@@ -90,20 +96,43 @@ beforeEach(async () => {
 
 describe('composing an agent from a preset', () => {
   it('hands an absolute plugin path to Node as a file URL', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-preset-absolute-plugin-'))
-    const presetDir = join(root, 'absolute')
-    const plugin = join(FIXTURES, 'plugins', 'contribute.js')
-    await mkdir(presetDir)
-    await writeFile(
-      join(presetDir, COMPOSITION_FILE),
-      `- id: only\n  name: ${plugin}\n  config:\n    tool: absolute\n`,
-    )
-    const scoped = await harness({ default: 'absolute', roots: [{ path: root, trust: 'user' }], includeShippedRoot: false, includeUserRoot: false })
+    const scoped = await harness([toolPreset('absolute', CONTRIBUTE, 'absolute')], 'absolute')
     const imported = vi.spyOn(scoped.loader.internal!, 'import')
 
     await agentOn(scoped, 'sess-absolute-plugin')
 
-    expect(imported).toHaveBeenCalledWith(pathToFileURL(plugin).href, expect.any(String), {})
+    expect(imported).toHaveBeenCalledWith(pathToFileURL(CONTRIBUTE).href, expect.any(String), {})
+  })
+
+  it('resolves a relative row specifier against the composition base the source named', async () => {
+    // The fixture rows name `../../plugins/contribute.js`, which only resolves
+    // beside the preset's own files — the base URL travels with the rows.
+    const scoped = await harness()
+    const imported = vi.spyOn(scoped.loader.internal!, 'import')
+
+    await agentOn(scoped, 'sess-relative-plugin', 'minimal')
+
+    expect(imported).toHaveBeenCalledWith('../../plugins/contribute.js', pathToFileURL(join(SYSTEM, 'minimal')).href + '/', {})
+  })
+
+  it('mounts rows with no base URL, as a file-free source supplies them', async () => {
+    const scoped = await harness([{ id: 'bare', trust: 'system', rows: [{ id: 'only', name: CONTRIBUTE, config: { tool: 'bare' } }] }], 'bare')
+
+    const agent = await agentOn(scoped, 'sess-no-base')
+
+    expect(toolNames(scoped, agent)).toEqual(['bare'])
+  })
+
+  it('mounts a clone of the source rows, so the Loader never mutates the source', async () => {
+    const rows = [{ id: 'only', name: CONTRIBUTE, config: { tool: 'cloned' } }]
+    const pristine = structuredClone(rows)
+    const scoped = await harness([{ id: 'cloned', trust: 'system', rows }], 'cloned')
+
+    await agentOn(scoped, 'sess-cloned')
+
+    // The Loader stores each row's options by identity and writes into them;
+    // a source handing out one shared row set must not see that state.
+    expect(rows).toEqual(pristine)
   })
 
   it('gives each session only its own preset\'s tools', async () => {
@@ -249,16 +278,7 @@ describe('rejecting a composition that cannot be used', () => {
     // message names none of them; unflattened, the operator is told only that
     // "loader entries failed to apply" and has nothing to act on.
     await expect(agentOn(ctx, 'sess-two-broken', 'two-broken'))
-      .rejects.toThrow(/first-refuses[\s\S]*second-refuses/)
-  })
-
-  it('names the rows inside a failed group, not the group alone', async () => {
-    // The Loader's per-row wrapper keeps only `cause.message`, so a group's
-    // own AggregateError arrives with its `errors` reachable through `cause`
-    // alone. Reading the message stops at "loader entries failed to apply"
-    // and names neither row that actually refused.
-    await expect(agentOn(ctx, 'sess-nested-broken', 'nested-broken'))
-      .rejects.toThrow(/outer[\s\S]*inner-first[\s\S]*inner-second/)
+      .rejects.toThrow(/first-missing[\s\S]*second-missing/)
   })
 
   it('names the unresolved service when a row never activates', async () => {
@@ -328,8 +348,9 @@ describe('rejecting a composition that cannot be used', () => {
     // The service's own mount() guards this before delegating; the exported
     // function is callable on its own, so the boundary holds there too.
     const preset = await ctx.agentPresets.resolve('standard')
+    const composition = await ctx.agentPresetSource.composition(preset)
 
-    await expect(mountPreset(ctx, preset)).rejects.toThrow(/unscoped context/)
+    await expect(mountPreset(ctx, preset, composition)).rejects.toThrow(/unscoped context/)
   })
 
   it('reports the known ids when a preset is unknown', async () => {
@@ -339,14 +360,42 @@ describe('rejecting a composition that cannot be used', () => {
 })
 
 describe('the preset roster', () => {
-  it('lists every root\'s presets with the earlier root winning', async () => {
+  it('lists every preset the source supplies, broken ones included', async () => {
     const listed = await ctx.agentPresets.list()
 
-    // `not-a-preset` is the fixture ghost: no composition file, listed broken.
+    // `not-a-preset` is the fixture ghost: no composition, listed broken.
     expect(listed.map(preset => preset.id).sort())
-      .toEqual(['broken', 'isolated', 'late', 'leaky', 'minimal', 'nested-broken', 'not-a-preset', 'pending', 'standard', 'two-broken'])
+      .toEqual(['broken', 'isolated', 'late', 'leaky', 'minimal', 'not-a-preset', 'pending', 'standard', 'two-broken'])
     expect(listed.find(preset => preset.id === 'standard')?.trust).toBe('system')
     expect(listed.find(preset => preset.id === 'not-a-preset')?.broken).toMatch(/is missing/)
+  })
+
+  it('reads, copies, and removes through the source', async () => {
+    await ctx.agentPresets.copy('standard', 'mine', '我的模式')
+
+    expect(await ctx.agentPresets.read('mine')).toBe(await ctx.agentPresets.read('standard'))
+    expect((await ctx.agentPresets.list()).find(preset => preset.id === 'mine')).toMatchObject({ trust: 'user', name: '我的模式' })
+    expect(ctx.agentPresets.authorable).toBe(true)
+
+    await ctx.agentPresets.remove('mine')
+
+    expect((await ctx.agentPresets.list()).some(preset => preset.id === 'mine')).toBe(false)
+  })
+
+  it('refuses a copy under an id the source already supplies', async () => {
+    // The roster check is the registry's own: the source's occupancy check
+    // only sees its writable location, while a shipped id shadows it.
+    await expect(ctx.agentPresets.copy('standard', 'minimal')).rejects.toThrow(/already exists/)
+  })
+
+  it('reports authoring as unavailable when the source has nowhere to write', async () => {
+    const readOnly = new Context()
+    await readOnly.plugin(Loader)
+    await readOnly.plugin(MemoryPresetSource, { entries: [fixturePreset(SYSTEM, 'standard', 'system')], writable: false })
+    await readOnly.plugin(AgentPresets, { default: 'standard' })
+
+    expect(readOnly.agentPresets.authorable).toBe(false)
+    await expect(readOnly.agentPresets.copy('standard', 'mine')).rejects.toThrow(/read-only/)
   })
 
   it('exposes the configured default id', () => {
@@ -355,18 +404,15 @@ describe('the preset roster', () => {
 })
 
 describe('composing from a broken preset', () => {
-  /** A roster whose only user preset carries `composition`. */
-  async function rosterWith(composition: string): Promise<Context> {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-preset-broken-'))
-    await mkdir(join(root, 'damaged'))
-    await writeFile(join(root, 'damaged', COMPOSITION_FILE), composition)
-    return await harness({ default: 'damaged', roots: [{ path: root, trust: 'user' as const }], includeShippedRoot: false, includeUserRoot: false })
+  /** A roster whose only preset the source reports broken with `reason`. */
+  async function rosterWith(reason: string): Promise<Context> {
+    return await harness([{ id: 'damaged', trust: 'user', rows: [], broken: reason }], 'damaged')
   }
 
-  it('refuses the mount up front with the discovery-reported reason', async () => {
-    const scoped = await rosterWith('- id: x\n  name: [unclosed\n')
+  it('refuses the mount up front with the source-reported reason', async () => {
+    const scoped = await rosterWith('the composition is not valid YAML: bad indentation')
 
-    // The refusal happens before the loader ever sees the file, so every
+    // The refusal happens before the loader ever sees the rows, so every
     // unloadable shape gets the same early PresetMountError — and a rejected
     // setup rolls the whole agent creation back.
     await expect(agentOn(scoped, 'sess-broken', 'damaged')).rejects.toThrow(PresetMountError)
@@ -375,14 +421,14 @@ describe('composing from a broken preset', () => {
   })
 
   it('refuses the standing key a cold reader would mount by', async () => {
-    const scoped = await rosterWith('rows: not-a-list\n')
+    const scoped = await rosterWith('the composition must be a top-level list of plugin rows')
 
     await expect(scoped.agentPresets.standingKeyFor('damaged'))
       .rejects.toThrow(/top-level list of plugin rows/)
   })
 
   it('still resolves the broken row for the surfaces that manage it', async () => {
-    const scoped = await rosterWith('- id: x\n  name: [unclosed\n')
+    const scoped = await rosterWith('the composition is not valid YAML: bad indentation')
 
     // Deleting and reporting need the row; only composing refuses it.
     expect((await scoped.agentPresets.resolve('damaged')).broken).toMatch(/not valid YAML/)
@@ -392,63 +438,25 @@ describe('composing from a broken preset', () => {
 describe('a roster with nothing in it', () => {
   it('says so instead of naming an empty list of candidates', async () => {
     const bare = new Context()
-    bare.baseUrl = pathToFileURL(FIXTURES).href + '/'
     await bare.plugin(Loader)
-    await bare.plugin(AgentPresets, { default: 'standard', roots: [], includeShippedRoot: false, includeUserRoot: false })
+    await bare.plugin(MemoryPresetSource, { entries: [] })
+    await bare.plugin(AgentPresets, { default: 'standard' })
 
     await expect(bare.agentPresets.resolve())
       .rejects.toThrow(/preset "standard" not found \(available: none\)/)
   })
 })
 
-describe('a roster with no base to resolve from', () => {
-  it('refuses at load rather than calling every preset broken', async () => {
-    // Health answers "can this row be imported?", and the same package name
-    // fails from a preset's own directory while resolving from the installed
-    // harness. Without the base there is no answer, and the silent one is
-    // exactly the failure the check exists to report.
-    const baseless = new Context()
-    await baseless.plugin(Loader)
-
-    await expect(baseless.plugin(AgentPresets, {
-      default: 'standard', roots: ROOTS, includeShippedRoot: false, includeUserRoot: false,
-    })).rejects.toThrow(/needs `ctx\.baseUrl`/)
-  })
-})
-
-describe('the preset file is an input, never a persistence target', () => {
+describe('a composition is an input, never a persistence target', () => {
   it('survives a row that disposes itself, which makes the Loader persist a tree', async () => {
-    // The preset lives in a temp root, not under `fixtures/`: without the
-    // `write()` override the Loader REWRITES the composition it read, so a
-    // committed fixture would be mutated by the very run that proves the bug
-    // and every later run would compare against the damaged file and pass.
-    const root = await mkdtemp(join(tmpdir(), 'dsh-preset-write-'))
-    const dir = join(root, 'self-disposing')
-    await mkdir(dir)
-    const path = join(dir, COMPOSITION_FILE)
-    const composition = [
-      '- id: tool-kept',
-      `  name: ${join(FIXTURES, 'plugins', 'contribute.js')}`,
-      '  config:',
-      '    tool: kept',
-      '- id: goes-away',
-      `  name: ${join(FIXTURES, 'plugins', 'self-dispose.js')}`,
-      '',
-    ].join('\n')
-    await writeFile(path, composition)
-
-    const scoped = new Context()
-    scoped.baseUrl = pathToFileURL(FIXTURES).href + '/'
-    await scoped.plugin(Loader)
-    scoped.loader.builtins.include = Include
-    scoped.loader.builtins.group = Group
-    await scoped.plugin(LlmRuntime)
-    await scoped.plugin(SessionStore)
-    await scoped.plugin(SystemPrompt, { persona: '' })
-    await scoped.plugin(ToolRuntime)
-    await scoped.plugin(AgentRegistry)
-    await scoped.plugin(AgentLoop, { agents: [] })
-    await scoped.plugin(AgentPresets, { default: 'self-disposing', roots: [{ path: root, trust: 'user' as const }], includeShippedRoot: false, includeUserRoot: false })
+    const rows = [
+      { id: 'tool-kept', name: CONTRIBUTE, config: { tool: 'kept' } },
+      { id: 'goes-away', name: join(FIXTURES, 'plugins', 'self-dispose.js') },
+    ]
+    const pristine = structuredClone(rows)
+    const scoped = await harness([{ id: 'self-disposing', trust: 'user', rows }], 'self-disposing')
+    const updates: string[] = []
+    scoped.on('loader/config-update', () => { updates.push('config-update') })
 
     await scoped.agents.create({
       sessionId: SessionId('sess-self-dispose'),
@@ -463,10 +471,12 @@ describe('the preset file is an input, never a persistence target', () => {
     // proves one — so the wait only has to clear settlement.
     await new Promise(resolve => setTimeout(resolve, 50))
 
-    // Inherited, `EntryTree.write()` persists the dying tree — stamping
-    // `disabled: true` onto the row and, in the shipped case, truncating the
-    // composition every session shares.
-    expect(await readFile(path, 'utf8')).toBe(composition)
+    // A persisting tree would announce the write and the Loader would have
+    // stamped `disabled: true` onto the dying row; the source's rows are
+    // untouched because the mount cloned them, and nothing was announced
+    // because `write()` is a no-op.
+    expect(updates).toEqual([])
+    expect(rows).toEqual(pristine)
   })
 })
 
@@ -496,6 +506,8 @@ describe('replacing a composition', () => {
     })
 
     agent.session.append('agent-preset/selected', { agentPreset: 'minimal' })
+    // Any other durable record is not a selection and is not forwarded.
+    agent.session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
 
     expect(selected).toEqual([[SessionId('sess-selected'), 'minimal']])
   })
@@ -513,27 +525,6 @@ describe('replacing a composition', () => {
     expect(toolNames(ctx, handle.agent)).toEqual(['beta'])
     expect(toolNames(ctx, keeper)).toEqual(['alpha'])
     expect(toolNames(ctx)).toEqual([])
-  })
-
-  it('notifies tool views after reparenting and contains notification failures', async () => {
-    const handle = await ctx.agents.create({
-      sessionId: SessionId('sess-tool-change'),
-      setup: async (agentCtx: Context) => void await ctx.agentPresets.mount(agentCtx, 'standard'),
-    })
-    await ctx.agentPresets.standingKeyFor('minimal')
-    let changes = 0
-    const stopCounting = ctx.on('tools/change', () => { changes += 1 })
-    await ctx.agentPresets.recompose(handle.agent.ctx, 'minimal')
-    expect(changes).toBe(1)
-    stopCounting()
-
-    const warnings: string[] = []
-    ctx.logger.warn = ((message: unknown) => { warnings.push(String(message)) }) as typeof ctx.logger.warn
-    const stopThrowing = ctx.on('tools/change', () => { throw new Error('listener failed') })
-    await expect(ctx.agentPresets.recompose(handle.agent.ctx, 'standard')).resolves.toMatchObject({ id: 'standard' })
-    expect(ctx.agentPresets.composedPreset(handle.agent.ctx)).toBe('standard')
-    expect(warnings).toEqual([expect.stringContaining('tools/change listener failed')])
-    stopThrowing()
   })
 
   it('leaves the agent on its previous composition when the new one is unknown', async () => {
@@ -579,19 +570,16 @@ describe('replacing a composition', () => {
     expect(warnings).toEqual([])
   })
 
-  it('says nothing when the composition opts out of every root', async () => {
-    // Presets are optional: every surface except the Web bundle keeps its
-    // model-facing rows in the host plane, so an agent with a chain of one is
-    // exactly right there and the diagnostic must stay silent. Opting out is
-    // what makes this rosterless — empty `roots` alone would still derive the
-    // harness-home root, which is a roster like any other.
-    const rosterless = await harness({ default: 'standard', roots: [], includeShippedRoot: false, includeUserRoot: false })
+  it('warns even when the source supplies nothing, because a mounted roster is a roster', async () => {
+    // A rosterless deployment is one that does not mount this plugin at all;
+    // a source is a required injection, so there is no opt-out underneath it.
+    const empty = await harness([])
     const warnings: string[] = []
-    rosterless.logger.warn = ((message: unknown) => { warnings.push(String(message)) }) as typeof rosterless.logger.warn
+    empty.logger.warn = ((message: unknown) => { warnings.push(String(message)) }) as typeof empty.logger.warn
 
-    await rosterless.agents.create({ sessionId: SessionId('sess-no-roster') })
+    await empty.agents.create({ sessionId: SessionId('sess-empty-source') })
 
-    expect(warnings).toEqual([])
+    expect(warnings.at(-1)).toMatch(/without joining an agent preset/)
   })
 
   it('composes an agent that had nothing installed', async () => {
@@ -616,35 +604,19 @@ describe('replacing a composition', () => {
   })
 
   it('keeps the agent on its standing composition when a switch fails, even with the source deleted', async () => {
-    // A preset root this test owns, so removing the composition mid-flight
-    // cannot disturb the shipped fixtures.
-    const root = await mkdtemp(join(tmpdir(), 'dsh-preset-restore-'))
-    const seeded: [string, string][] = [['first', `- id: only\n  name: ${join(FIXTURES, 'plugins', 'contribute.js')}\n  config:\n    tool: only\n`], ['broken', `- id: nope\n  name: ${join(FIXTURES, 'plugins', 'throws.js')}\n  config:\n    message: refuses\n`]]
-    for (const [id, body] of seeded) {
-      await mkdir(join(root, id))
-      await writeFile(join(root, id, COMPOSITION_FILE), body)
-    }
-    const scoped = new Context()
-    scoped.baseUrl = pathToFileURL(FIXTURES).href + '/'
-    await scoped.plugin(Loader)
-    scoped.loader.builtins.include = Include
-    scoped.loader.builtins.group = Group
-    await scoped.plugin(LlmRuntime)
-    await scoped.plugin(SessionStore)
-    await scoped.plugin(SystemPrompt, { persona: '' })
-    await scoped.plugin(ToolRuntime)
-    await scoped.plugin(AgentRegistry)
-    await scoped.plugin(AgentLoop, { agents: [] })
-    await scoped.plugin(AgentPresets, { default: 'first', roots: [{ path: root, trust: 'user' as const }], includeShippedRoot: false, includeUserRoot: false })
+    const scoped = await harness([
+      toolPreset('first', CONTRIBUTE, 'only'),
+      { id: 'broken', trust: 'user', rows: [{ id: 'nope', name: './does-not-exist.js' }], baseUrl: pathToFileURL(FIXTURES).href + '/' },
+    ], 'first')
     const handle = await scoped.agents.create({
       sessionId: SessionId('sess-restore-gone'),
       setup: async (agentCtx: Context) => void await scoped.agentPresets.mount(agentCtx, 'first'),
     })
 
-    // The roster is a live directory: the composition the agent came from can
-    // be gone from DISK by the time a switch fails. The standing mount is not
-    // the file — it outlives deletion, so there is nothing to "restore".
-    await rm(join(root, 'first'), { recursive: true })
+    // The roster is live: the composition the agent came from can be gone
+    // from the SOURCE by the time a switch fails. The standing mount is not
+    // the source entry — it outlives deletion, so there is nothing to "restore".
+    sourceOf(scoped).table.delete('first')
 
     await expect(scoped.agentPresets.recompose(handle.agent.ctx, 'broken'))
       .rejects.toThrow(/failed to mount/)
@@ -661,32 +633,27 @@ describe('replacing a composition', () => {
   })
 })
 
-describe('editing a composition file', () => {
+describe('editing a composition at its source', () => {
   /** One-row composition whose single tool is named `tool`. */
-  const rowFor = (tool: string): string =>
-    `- id: only\n  name: ${join(FIXTURES, 'plugins', 'contribute.js')}\n  config:\n    tool: ${tool}\n`
+  const rowFor = (tool: string) => [{ id: 'only', name: CONTRIBUTE, config: { tool } }]
 
   /**
-   * A context over a temp root holding one editable preset. The id is
-   * per-test because `livePresetMounts()` is a process-global registry.
+   * A context over a source holding one editable preset. The id is per-test
+   * because `livePresetMounts()` is a process-global registry.
    */
-  async function editable(id: string): Promise<{ scoped: Context; path: string }> {
-    const root = await mkdtemp(join(tmpdir(), 'dsh-preset-edit-'))
-    await mkdir(join(root, id))
-    const path = join(root, id, COMPOSITION_FILE)
-    await writeFile(path, rowFor('before'))
-    const scoped = await harness({ default: id, roots: [{ path: root, trust: 'user' as const }], includeShippedRoot: false, includeUserRoot: false })
-    return { scoped, path }
+  async function editable(id: string): Promise<{ scoped: Context; edit: (tool: string) => void }> {
+    const scoped = await harness([{ id, trust: 'user', rows: rowFor('before') }], id)
+    return { scoped, edit: (tool: string) => { sourceOf(scoped).edit(id, rowFor(tool)) } }
   }
 
   it('starts a new generation for later sessions while joined ones keep theirs', async () => {
-    const { scoped, path } = await editable('edited')
+    const { scoped, edit } = await editable('edited')
     const first = await agentOn(scoped, 'sess-gen-first', 'edited')
     expect(toolNames(scoped, first)).toEqual(['before'])
 
-    // Files are the only composition editor now (authoring is copy/delete),
-    // so the standing mount notices the file's stamp changing on its own.
-    await writeFile(path, rowFor('afterwards'))
+    // Editing the source is the only composition editor (authoring is
+    // copy/delete), so the standing mount notices the stamp changing on its own.
+    edit('afterwards')
 
     const second = await agentOn(scoped, 'sess-gen-second', 'edited')
     expect(toolNames(scoped, second)).toEqual(['afterwards'])
@@ -695,10 +662,10 @@ describe('editing a composition file', () => {
   })
 
   it('gives two sessions racing the refreshed file one shared new generation', async () => {
-    const { scoped, path } = await editable('raced')
+    const { scoped, edit } = await editable('raced')
     await agentOn(scoped, 'sess-race-seed', 'raced')
 
-    await writeFile(path, rowFor('afterwards'))
+    edit('afterwards')
 
     // Whichever racer swaps the pointer first, the other must join it rather
     // than fork a third generation off the same edit.
@@ -712,22 +679,17 @@ describe('editing a composition file', () => {
   })
 
   it('keeps a newer generation pointer when a stale refresh loses the swap race', async () => {
-    const { scoped, path } = await editable('guarded-refresh')
+    const { scoped, edit } = await editable('guarded-refresh')
     const preset = await scoped.agentPresets.resolve('guarded-refresh')
     await agentOn(scoped, 'sess-guarded-refresh-seed', 'guarded-refresh')
     const service = scoped.agentPresets as unknown as {
-      standing: Map<string, Promise<{
-        key: unknown
-        scope: unknown
-        stamp: { mtimeMs: number; size: number }
-      }>>
+      standing: Map<string, Promise<{ key: unknown; scope: unknown; stamp: string }>>
       ensureStanding(current: typeof preset): Promise<unknown>
     }
     const stalePromise = service.standing.get(preset.id)!
     const stale = await stalePromise
-    await writeFile(path, rowFor('afterwards'))
-    const { mtimeMs, size } = await stat(path)
-    const newer = { ...stale, stamp: { mtimeMs, size } }
+    edit('afterwards')
+    const newer = { ...stale, stamp: (await scoped.agentPresetSource.stamp(preset))! }
     const newerPromise = Promise.resolve(newer)
 
     // `await pending` yields before the guarded delete, letting the winning
@@ -752,37 +714,32 @@ describe('editing a composition file', () => {
     expect(await scoped.agentPresets.standingKeyFor('cold-read')).toBe(key)
   })
 
-  it('refuses to mount a generation it cannot stamp', async () => {
-    const { scoped, path } = await editable('unstampable')
-    await rm(path)
+  it('refuses to mount a generation whose composition the source cannot read', async () => {
+    const { scoped } = await editable('unstampable')
+    const preset = await scoped.agentPresets.resolve('unstampable')
+    sourceOf(scoped).table.get('unstampable')!.unreadable = true
 
-    // Discovery would refuse the preset too; a caller that resolved just
-    // before the deletion must get a mount failure, not an unstamped
-    // generation that no later edit could ever refresh.
-    const racer = scoped.agentPresets as unknown as {
-      ensureStanding(preset: { id: string; trust: 'user'; path: string }): Promise<unknown>
-    }
-    await expect(racer.ensureStanding({ id: 'unstampable', trust: 'user', path }))
-      .rejects.toThrow(PresetMountError)
-    expect(livePresetMounts().filter(mount => mount.presetId === 'unstampable')).toHaveLength(0)
+    // A source that lists the preset but cannot read its composition must
+    // fail the first mount, not leave an unstamped generation that no later
+    // edit could ever refresh — and the failure names the source's reason.
+    await expect(agentOn(scoped, 'sess-unstampable', 'unstampable')).rejects.toThrow(PresetMountError)
+    await expect(agentOn(scoped, 'sess-unstampable-2', 'unstampable')).rejects.toThrow(/cannot be read/)
+    expect(livePresetMounts().filter(mount => mount.presetId === preset.id)).toHaveLength(0)
   })
 
-  it('keeps serving the mounted generation when the file cannot be statted', async () => {
-    const { scoped, path } = await editable('stale')
+  it('keeps serving the mounted generation when the source cannot stamp it', async () => {
+    const { scoped } = await editable('stale')
     await agentOn(scoped, 'sess-stale-served', 'stale')
     expect(livePresetMounts().filter(mount => mount.presetId === 'stale')).toHaveLength(1)
 
-    await rm(path)
+    sourceOf(scoped).table.get('stale')!.stamp = undefined
 
-    // Discovery refuses a preset whose composition cannot be statted, so the
-    // public route cannot reach this state — but a caller that resolved just
-    // before the deletion still can, and it must be served the standing
-    // generation rather than failed over a stat.
-    const racer = scoped.agentPresets as unknown as {
-      ensureStanding(preset: { id: string; trust: 'user'; path: string }): Promise<unknown>
-    }
-    await racer.ensureStanding({ id: 'stale', trust: 'user', path })
+    // A mount must survive its composition disappearing underneath it: the
+    // next session is served the standing generation rather than failed over
+    // a stamp the source can no longer read.
+    const again = await agentOn(scoped, 'sess-stale-again', 'stale')
 
+    expect(toolNames(scoped, again)).toEqual(['before'])
     expect(livePresetMounts().filter(mount => mount.presetId === 'stale')).toHaveLength(1)
   })
 })

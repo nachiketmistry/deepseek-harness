@@ -433,7 +433,7 @@
 
 # The preset roster, two rows. `agent-preset-source` is the filesystem
 # Service Provider of the agent-preset source seam. The shipped presets are
-# bundled inside `dsh-agent-presets` itself and prepended as a read-only
+# bundled inside `dsh-agent-presets-filesystem` itself and prepended as a read-only
 # `system` root (`includeShippedRoot`); `$DSH_HOME/.agent-presets` is where a
 # person — or an agent — authors their own, appended by the same source
 # (`includeUserRoot`), and carries the same trust as shell access because a
@@ -443,6 +443,7 @@
     - id: agent-preset-source
       name: '@deepseek-ai/dsh-agent-presets-filesystem'
       config:
+        includeShippedRoot: true
         includeUserRoot: true
     - id: agent-presets
       name: '@deepseek-ai/dsh-agent-presets'

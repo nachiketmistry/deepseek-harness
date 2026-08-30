@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { apply as applyConnection, inject as connectionInject } from '@deepseek-ai/dsh-client-connection'
 import type { HostConnectionHandle } from '@deepseek-ai/dsh-client-connection'
 import type { WebServer, WebRoute } from '@deepseek-ai/dsh-host-webserver'
+import { toFetchRequest, writeFetchResponse } from '@deepseek-ai/dsh-host-webserver-node'
 import {
   bindTypertRemote,
   Remote,
@@ -139,7 +140,7 @@ class FakeConnectionService extends Service {
   }
 }
 
-function fakeHttpServer(routes: WebRoute[]): Pick<WebServer, 'register' | 'tapIndex' | 'port'> {
+function fakeHttpServer(routes: WebRoute[]): Pick<WebServer, 'register' | 'tapIndex' | 'address'> {
   return {
     register(route) {
       if (routes.some(candidate => candidate.kind === route.kind && candidate.path === route.path)) {
@@ -149,13 +150,15 @@ function fakeHttpServer(routes: WebRoute[]): Pick<WebServer, 'register' | 'tapIn
       return () => { routes.splice(routes.indexOf(route), 1) }
     },
     tapIndex: () => () => {},
-    port: 0,
+    address: { host: '127.0.0.1', port: 0 },
   }
 }
 
 async function serveRoute(route: WebRoute): Promise<{ readonly origin: string; close(): Promise<void> }> {
   const server = createServer((request, response) => {
-    void route.handler(request, response)
+    void (async () => {
+      await writeFetchResponse(await route.handler(toFetchRequest(request, response)), response)
+    })()
   })
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const address = server.address() as AddressInfo

@@ -1,7 +1,6 @@
 /** Node-half composition diagnostics for package metadata and built client bundles. */
 
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import type { IncomingMessage, ServerResponse } from 'node:http'
 import { SourceMap } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -82,8 +81,8 @@ function constructWithRoute(
     },
   })
   let route: WebRoute | undefined
-  const webServer: Pick<WebServer, 'port' | 'register' | 'tapIndex'> = {
-    port: 0,
+  const webServer: Pick<WebServer, 'address' | 'register' | 'tapIndex'> = {
+    address: { host: '127.0.0.1', port: 0 },
     register: (candidate) => {
       if (candidate.path === '/plugins') route = candidate
       return () => {}
@@ -107,22 +106,13 @@ async function routeRequest(route: WebRoute, url: string, method = 'GET'): Promi
   headers: Record<string, string> | undefined
   body: Buffer
 }> {
-  let status = 0
-  let headers: Record<string, string> | undefined
-  let body = Buffer.alloc(0)
-  const response = {
-    writeHead(nextStatus: number, nextHeaders?: Record<string, string>) {
-      status = nextStatus
-      headers = nextHeaders
-      return response
-    },
-    end(chunk?: Uint8Array) {
-      body = chunk === undefined ? Buffer.alloc(0) : Buffer.from(chunk)
-      return response
-    },
-  } as unknown as ServerResponse
-  await route.handler({ method, url } as IncomingMessage, response)
-  return { status, headers, body }
+  const response = await route.handler(new Request(new URL(url, 'http://dsh.internal'), { method }))
+  const headers = Object.fromEntries(response.headers)
+  return {
+    status: response.status,
+    headers: Object.keys(headers).length === 0 ? undefined : headers,
+    body: Buffer.from(await response.arrayBuffer()),
+  }
 }
 
 /** Execute the exact first inline script emitted by the Host boot rows. */

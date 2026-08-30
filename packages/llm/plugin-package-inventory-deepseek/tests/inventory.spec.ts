@@ -10,6 +10,7 @@ import AgentRegistry, { type Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import AgentPresets, { mountPreset } from '@deepseek-ai/dsh-agent-presets'
+import FilesystemAgentPresetSource from '@deepseek-ai/dsh-agent-presets-filesystem'
 import DeepSeekLlmApiExtensionRegistry from '@deepseek-ai/dsh-deepseek-llm-api-extensions'
 import * as PluginInventory from '../src/index.ts'
 
@@ -44,7 +45,8 @@ async function harness(enabled?: boolean): Promise<{ ctx: Context; root: string;
   await ctx.plugin(Loader)
   ctx.loader.builtins.include = Include
   await ctx.plugin(AgentRegistry)
-  await ctx.plugin(AgentPresets, { default: 'fixture', roots: [], includeShippedRoot: false, includeUserRoot: false })
+  await ctx.plugin(FilesystemAgentPresetSource, { roots: [], includeShippedRoot: false, includeUserRoot: false })
+  await ctx.plugin(AgentPresets, { default: 'fixture' })
   await ctx.plugin(DeepSeekLlmApiExtensionRegistry)
   const inventory = enabled === undefined
     ? ctx.plugin(PluginInventory)
@@ -211,7 +213,8 @@ describe('DeepSeek plugin package inventory', () => {
 
     const standingKey = {}
     const standing = createScope(ctx, standingKey)
-    await mountPreset(standing.ctx, { id: 'fixture', trust: 'user', path: composition })
+    const preset = { id: 'fixture', trust: 'user' as const, path: composition }
+    await mountPreset(standing.ctx, preset, await ctx.agentPresetSource.composition(preset))
     const agentKey = {}
     const agentScope = createScope(ctx, agentKey, { parent: standingKey })
     const id = SessionId('preset-agent')

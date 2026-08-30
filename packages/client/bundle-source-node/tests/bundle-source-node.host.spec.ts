@@ -44,34 +44,30 @@ function writeBuiltPackage(packageName: string, client: Record<string, unknown> 
   return clientPath
 }
 
-/** Construct the source anchored at the fixture root. */
+/** The fixture root as a resolution base. */
+function base(): string {
+  return pathToFileURL(root!).href + '/'
+}
+
+/** Construct the source; resolution happens per call, against the base a row's tree carries. */
 function construct(): NodeClientBundleSource {
-  const ctx = new Context()
-  ctx.baseUrl = pathToFileURL(root!).href + '/'
-  return new NodeClientBundleSource(ctx)
+  return new NodeClientBundleSource(new Context())
 }
 
 describe('NodeClientBundleSource', () => {
-  it('requires the config-tree anchor', () => {
-    expect(() => new NodeClientBundleSource(new Context()))
-      .toThrow('client-bundle-source-node: ctx.baseUrl is unset')
-  })
-
   it('describes a web client package with its normalized declaration', () => {
     const name = '@scope/declared'
     writeBuiltPackage(name, { inject: ['@scope/base'], external: ['react'], immediately: true })
-    expect(construct().describe(name)).toEqual({ inject: ['@scope/base'], external: ['react'], immediately: true })
+    expect(construct().resolve(name, base())?.declaration)
+      .toEqual({ inject: ['@scope/base'], external: ['react'], immediately: true })
   })
 
   it('answers undefined for an unresolvable name and keeps that verdict', () => {
     writeBuiltPackage('@scope/anchor')
     const source = construct()
-    expect(source.describe('cordis:include')).toBeUndefined()
-    expect(source.describe('@scope/late')).toBeUndefined()
-    // A package appearing after the first verdict does not change it.
-    writeBuiltPackage('@scope/late')
-    expect(source.describe('@scope/late')).toBeUndefined()
-    expect(source.locate('cordis:include')).toBeUndefined()
+    expect(source.resolve('cordis:include', base())).toBeUndefined()
+    expect(source.resolve('@scope/subpath/deep', base())).toBeUndefined()
+    expect(source.resolve('@scope/absent', base())).toBeUndefined()
   })
 
   it('answers undefined for a package without a web client declaration', () => {
@@ -80,34 +76,38 @@ describe('NodeClientBundleSource', () => {
     writePackage(absent, { exports: { './package.json': './package.json' } })
     writePackage(other, { dsh: { client: { platform: 'terminal' } }, exports: { './package.json': './package.json' } })
     const source = construct()
-    expect(source.describe(absent)).toBeUndefined()
-    expect(source.describe(other)).toBeUndefined()
+    expect(source.resolve(absent, base())).toBeUndefined()
+    expect(source.resolve(other, base())).toBeUndefined()
   })
 
   it('rejects a web client declaration without a ./client export', () => {
     const name = '@scope/exportless'
     writePackage(name, { dsh: { client: { platform: 'web' } }, exports: { './package.json': './package.json' } })
-    expect(() => construct().describe(name))
+    expect(() => construct().resolve(name, base()))
       .toThrow(`client-modules: ${name} declares dsh.client but exports no "./client" bundle`)
   })
 
   it('rejects a malformed declaration through the shared parser', () => {
     const name = '@scope/malformed'
     writePackage(name, webManifest({ external: 'react' }))
-    expect(() => construct().describe(name))
+    expect(() => construct().resolve(name, base()))
       .toThrow(`client-modules: ${name} dsh.client.external must be a string array`)
   })
 
-  it('locates and reads the built bundle, resolving the conditional export form', async () => {
+  it('locates and reads the built bundle, resolving the conditional export form', () => {
     const name = '@scope/built'
     const clientPath = writePackage(name, webManifest({}, { types: './lib/types/client.d.ts', default: './lib/client.js' }))
     mkdirSync(dirname(clientPath), { recursive: true })
     writeFileSync(clientPath, 'module.exports = { built: true }\n')
-    writeFileSync(`${clientPath}.map`, '{"version":3}\n')
+    writeFileSync(`${clientPath}.map`, '{"version":3,"sources":[],"names":[],"mappings":""}\n')
     const source = construct()
-    expect(source.locate(name)).toBe(clientPath)
-    expect(new TextDecoder().decode(source.read(name))).toBe('module.exports = { built: true }\n')
-    expect(new TextDecoder().decode(await source.readSourceMap(name))).toBe('{"version":3}\n')
+    const resolved = source.resolve(name, base())
+    expect(resolved?.location).toBe(clientPath)
+    expect(source.watchPath(clientPath)).toBe(clientPath)
+    const { bundle, baseline } = source.snapshot(name, clientPath)
+    expect(bundle.toString('utf8')).toBe('module.exports = { built: true }\n')
+    expect(baseline).toMatchObject({ path: clientPath, size: bundle.byteLength })
+    expect(source.readSourceMap(clientPath)?.parsed.version).toBe(3)
   })
 
   it('reports an absent bundle as a missing build with its location', () => {
@@ -116,7 +116,7 @@ describe('NodeClientBundleSource', () => {
     const source = construct()
     let thrown: unknown
     try {
-      source.read(name)
+      source.snapshot(name, clientPath)
     } catch (error) {
       thrown = error
     }
@@ -131,26 +131,23 @@ describe('NodeClientBundleSource', () => {
     const name = '@scope/directory-bundle'
     const clientPath = writePackage(name, webManifest())
     mkdirSync(clientPath, { recursive: true })
-    expect(() => construct().read(name)).toThrow(/EISDIR/)
+    expect(() => construct().snapshot(name, clientPath)).toThrow(/EISDIR/)
   })
 
-  it('answers undefined for an absent source map and rethrows other map read failures', async () => {
-    const mapless = '@scope/mapless'
-    const directoryMap = '@scope/directory-map'
-    writeBuiltPackage(mapless)
-    const clientPath = writeBuiltPackage(directoryMap)
-    mkdirSync(`${clientPath}.map`, { recursive: true })
+  it('answers undefined for an absent source map and rethrows other map read failures', () => {
+    const maplessPath = writeBuiltPackage('@scope/mapless')
+    const directoryMapPath = writeBuiltPackage('@scope/directory-map')
+    mkdirSync(`${directoryMapPath}.map`, { recursive: true })
     const source = construct()
-    await expect(source.readSourceMap(mapless)).resolves.toBeUndefined()
-    await expect(source.readSourceMap(directoryMap)).rejects.toThrow(/EISDIR/)
+    expect(source.readSourceMap(maplessPath)).toBeUndefined()
+    expect(() => source.readSourceMap(directoryMapPath)).toThrow(/EISDIR/)
   })
 
-  it('refuses bytes for a package that is not a web client package', async () => {
-    writeBuiltPackage('@scope/anchor')
-    const source = construct()
-    const message = 'client-bundle-source-node: @scope/absent is not a web client package'
-    expect(() => source.read('@scope/absent')).toThrow(message)
-    await expect(source.readSourceMap('@scope/absent')).rejects.toThrow(message)
+  it('rejects a map that is not a regular Source Map v3 object', () => {
+    const clientPath = writeBuiltPackage('@scope/bad-map')
+    writeFileSync(`${clientPath}.map`, '{"version":2}\n')
+    expect(() => construct().readSourceMap(clientPath))
+      .toThrow(`client-modules: ${clientPath}.map is not a regular Source Map v3 object`)
   })
 })
 

@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import WebSocket, { type RawData } from 'ws'
 import { Context, Service, symbols } from '@deepseek-ai/cordis'
 import { apply as applyConnection, inject as connectionInject } from '@deepseek-ai/dsh-client-connection'
-import WebServer from '@deepseek-ai/dsh-host-webserver'
+import NodeWebServer from '@deepseek-ai/dsh-host-webserver-node'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import {
   bindTypertRemote,
@@ -44,7 +44,7 @@ const agentId = (value: string): AgentWireId => value as AgentWireId
 function browserCookie(ctx: Context): string {
   const existing = browserCookies.get(ctx)
   if (existing !== undefined) return existing
-  const origin = `http://127.0.0.1:${String(ctx.webServer.port)}`
+  const origin = `http://127.0.0.1:${String(ctx.webServer.address!.port)}`
   const target = new URL(ctx.connection.authenticatedUrl(origin))
   let setCookie: string | undefined
   ctx.connection.authorizeIndex({
@@ -294,7 +294,7 @@ describe('Typert Remote streams', () => {
 
   it('uses the configured WebSocket heartbeat interval', { timeout: 1_000 }, async () => {
     const { ctx } = await setup(true, { websocketHeartbeatIntervalMs: 20 })
-    const socket = new WebSocket(`ws://127.0.0.1:${String(ctx.webServer.port)}/api/remote.mux`, {
+    const socket = new WebSocket(`ws://127.0.0.1:${String(ctx.webServer.address!.port)}/api/remote.mux`, {
       headers: { cookie: browserCookie(ctx) },
     })
     const ping = once(socket, 'ping')
@@ -307,7 +307,7 @@ describe('Typert Remote streams', () => {
 
   it('multiplexes independent streams over one WebSocket and propagates cancellation', async () => {
     const { ctx, service } = await setup(true)
-    const socket = new WebSocket(`ws://127.0.0.1:${String(ctx.webServer.port)}/api/remote.mux`, {
+    const socket = new WebSocket(`ws://127.0.0.1:${String(ctx.webServer.address!.port)}/api/remote.mux`, {
       headers: { cookie: browserCookie(ctx) },
     })
     await once(socket, 'open')
@@ -391,7 +391,7 @@ describe('Typert Remote streams', () => {
     expect(() => { ctx.typertGateway.registerRemoteEvents(source, REMOTE_HOST) })
       .toThrow('forwarded Remote event source is already registered')
 
-    const socket = new WebSocket(`ws://127.0.0.1:${String(ctx.webServer.port)}/api/remote.mux`, {
+    const socket = new WebSocket(`ws://127.0.0.1:${String(ctx.webServer.address!.port)}/api/remote.mux`, {
       headers: { cookie: browserCookie(ctx) },
     })
     await once(socket, 'open')
@@ -913,7 +913,7 @@ describe('Typert Remote streams', () => {
 
   it('validates the internal Remote event request and reports an absent source', async () => {
     const { ctx } = await setup(true)
-    const socket = new WebSocket(`ws://127.0.0.1:${String(ctx.webServer.port)}/api/remote.mux`, {
+    const socket = new WebSocket(`ws://127.0.0.1:${String(ctx.webServer.address!.port)}/api/remote.mux`, {
       headers: { cookie: browserCookie(ctx) },
     })
     await once(socket, 'open')
@@ -962,7 +962,7 @@ describe('Typert Remote streams', () => {
   it('applies Connection trusted-host policy before accepting the Gateway socket', async () => {
     const { ctx } = await setup(true)
     const socket = new WebSocket(
-      `ws://127.0.0.1:${String(ctx.webServer.port)}/api/remote.mux`,
+      `ws://127.0.0.1:${String(ctx.webServer.address!.port)}/api/remote.mux`,
       { headers: { host: 'untrusted.example' } },
     )
     socket.on('error', () => {})
@@ -977,7 +977,7 @@ describe('Typert Remote streams', () => {
 
   it('answers an unauthenticated trusted Host with 401 before opening a stream', async () => {
     const { ctx } = await setup(true)
-    const socket = new WebSocket(`ws://127.0.0.1:${String(ctx.webServer.port)}/api/remote.mux`)
+    const socket = new WebSocket(`ws://127.0.0.1:${String(ctx.webServer.address!.port)}/api/remote.mux`)
     socket.on('error', () => {})
     const responseEvent: unknown[] = await once(socket, 'unexpected-response')
     const request = responseEvent[0]
@@ -996,7 +996,7 @@ async function setup(
   const ctx = new Context()
   roots.push(ctx)
   if (transport) {
-    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    await ctx.plugin(NodeWebServer, { host: '127.0.0.1', port: 0 })
     provideBrowserCredentials(ctx)
   }
   await ctx.plugin(TypertRegistry)
@@ -1064,7 +1064,7 @@ interface RemoteEventTestClient {
 }
 
 async function openEventClient(ctx: Context, streamId: string): Promise<RemoteEventTestClient> {
-  const origin = `http://127.0.0.1:${String(ctx.webServer.port)}`
+  const origin = `http://127.0.0.1:${String(ctx.webServer.address!.port)}`
   const cookie = browserCookie(ctx)
   const socket = new WebSocket(`${origin.replace('http:', 'ws:')}/api/remote.mux`, {
     headers: { cookie },

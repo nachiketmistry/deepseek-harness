@@ -74,7 +74,7 @@ describe('real Loader composition', () => {
 
     const body = JSON.stringify({ action: 'ready_for_review' })
     const signature = `sha256=${createHmac('sha256', 'loader-secret').update(body).digest('hex')}`
-    const response = await fetch(`http://127.0.0.1:${String(context.webServer.port)}/github`, {
+    const response = await fetch(`http://127.0.0.1:${String(context.webServer.address!.port)}/github`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',

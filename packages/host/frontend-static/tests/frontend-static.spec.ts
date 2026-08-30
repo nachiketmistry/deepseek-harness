@@ -103,7 +103,7 @@ describe('real Loader composition', () => {
       .map(entry => entry.options.name)
     expect(unloaded).toEqual([])
     const server = loaded.webServer
-    const port = server.port
+    const port = server.address!.port
     const launchUrl = loaded.connection.authenticatedUrl(`http://127.0.0.1:${String(port)}`)
     const exchange = await fetch(launchUrl, { redirect: 'manual' })
     expect(exchange.status).toBe(303)
@@ -203,6 +203,6 @@ describe('real Loader composition', () => {
     expect(frontendEntry).toBeDefined()
     await frontendEntry!.fiber?.dispose()
     expect((await request(port, '/no/such/route')).status).toBe(404)
-    expect(() => server.registerFallback(() => {})).not.toThrow()
+    expect(() => server.registerFallback(() => new Response(null, { status: 204 }))).not.toThrow()
   })
 })

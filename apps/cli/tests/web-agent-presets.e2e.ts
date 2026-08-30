@@ -12,7 +12,9 @@ import type { PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { SUBAGENT_MODEL_SELECTION_SETTINGS_NAMESPACE } from '@deepseek-ai/dsh-tool-subagent/model-selection-settings'
-import { SETTINGS_NAMESPACE, SHIPPED_PRESET_ROOT } from '@deepseek-ai/dsh-agent-presets'
+import { SETTINGS_NAMESPACE, } from '@deepseek-ai/dsh-agent-presets'
+import type FilesystemAgentPresetSource from '@deepseek-ai/dsh-agent-presets-filesystem'
+import { SHIPPED_PRESET_ROOT } from '@deepseek-ai/dsh-agent-presets-filesystem'
 import { applyChildComposition, childSessionMeta } from '@deepseek-ai/dsh-subagent'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-compaction-basic'
@@ -942,7 +944,7 @@ describe('a composition that configures its own preset roots', () => {
   })
 
   it('keeps configured roots alongside the always-prepended shipped root', async () => {
-    expect(rootsCtx.agentPresets.roots.map(root => root.path)).toEqual([
+    expect((rootsCtx.agentPresetSource as FilesystemAgentPresetSource).roots.map(root => root.path)).toEqual([
       SHIPPED_PRESET_ROOT,
       teamRoot,
     ])

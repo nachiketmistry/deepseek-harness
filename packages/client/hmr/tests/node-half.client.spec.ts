@@ -75,13 +75,13 @@ function fakeClientModuleHost(rows: Map<string, string>, options: FakeHostOption
 // Structural fake: the plugin only touches register(); the service class
 // carries private state a literal cannot (and need not) reproduce.
 function fakeHttpServer(routes: WebRoute[]): WebServer {
-  const fake: Pick<WebServer, 'register' | 'tapIndex' | 'port'> = {
+  const fake: Pick<WebServer, 'register' | 'tapIndex' | 'address'> = {
     register(route) {
       routes.push(route)
       return () => { routes.splice(routes.indexOf(route), 1) }
     },
     tapIndex: () => () => {},
-    port: 0,
+    address: { host: '127.0.0.1', port: 0 },
   }
   return fake as WebServer
 }

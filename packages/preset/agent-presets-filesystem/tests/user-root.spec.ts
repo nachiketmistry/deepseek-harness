@@ -107,7 +107,7 @@ describe('the harness-home preset root', () => {
 
   it('is absent under includeUserRoot: false, which leaves the roster unauthorable', async () => {
     await seedHomePreset('mine')
-    const ctx = await roster({ includeUserRoot: false })
+    const ctx = await roster({ includeShippedRoot: false, includeUserRoot: false })
 
     expect((await ctx.agentPresets.list()).map(preset => preset.id)).not.toContain('mine')
     expect(ctx.agentPresets.authorable).toBe(false)

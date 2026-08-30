@@ -640,7 +640,7 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
         op: 'set', path: [WELCOME_NOTICE_ACK_FIELD], value: WELCOME_NOTICE_VERSION,
       }])
     }
-    const boundPort = ctx.get('webServer')?.port
+    const boundPort = ctx.get('webServer')?.address?.port
     if (boundPort === undefined) {
       throw new Error('web e2e scaffold: webServer service missing after settled boot')
     }

@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url'
 import yaml from 'js-yaml'
 import { entryListSchema } from '@deepseek-ai/cordis-plugin-include'
 import { evaluate } from '@deepseek-ai/cordis-plugin-loader'
-import { SHIPPED_PRESET_ROOT } from '@deepseek-ai/dsh-agent-presets'
+import { SHIPPED_PRESET_ROOT } from '@deepseek-ai/dsh-agent-presets-filesystem'
 import { composeEntries, initProfile, loadProfile, PROFILES_DIR } from '@deepseek-ai/dsh-app-boot'
 
 /**

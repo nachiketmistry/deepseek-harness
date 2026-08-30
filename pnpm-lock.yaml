@@ -701,6 +701,9 @@ importers:
       '@deepseek-ai/dsh-host-webserver':
         specifier: workspace:^
         version: link:../../host/webserver
+      '@deepseek-ai/dsh-host-webserver-node':
+        specifier: workspace:^
+        version: link:../../host/webserver-node
       '@deepseek-ai/dsh-invariants':
         specifier: workspace:^
         version: link:../../runtime-diagnostics/invariants
@@ -713,6 +716,9 @@ importers:
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
+      ws:
+        specifier: ^8.21.0
+        version: 8.21.0
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -2013,6 +2019,9 @@ importers:
       '@deepseek-ai/cordis':
         specifier: workspace:^
         version: link:../../../vendor/cordis
+      '@deepseek-ai/cordis-plugin-loader':
+        specifier: workspace:^
+        version: link:../../../vendor/loader
       '@deepseek-ai/dsh-client-modules':
         specifier: workspace:^
         version: link:../modules
@@ -6857,6 +6866,9 @@ importers:
       '@deepseek-ai/dsh-agent-presets':
         specifier: workspace:^
         version: link:../../preset/agent-presets
+      '@deepseek-ai/dsh-agent-presets-filesystem':
+        specifier: workspace:^
+        version: link:../../preset/agent-presets-filesystem
       '@deepseek-ai/dsh-deepseek-llm-api-extensions':
         specifier: workspace:^
         version: link:../deepseek-llm-api-extensions
@@ -10160,6 +10172,9 @@ importers:
       '@deepseek-ai/dsh-host-webserver':
         specifier: workspace:^
         version: link:../../host/webserver
+      '@deepseek-ai/dsh-host-webserver-node':
+        specifier: workspace:^
+        version: link:../../host/webserver-node
       '@deepseek-ai/dsh-invariants':
         specifier: workspace:^
         version: link:../../runtime-diagnostics/invariants

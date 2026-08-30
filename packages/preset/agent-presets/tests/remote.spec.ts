@@ -19,7 +19,10 @@ import AgentRegistry, { type Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { TypertRemoteFailure, type RemoteFailure } from '@deepseek-ai/dsh-typert-protocol'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import AgentPresets, { COMPOSITION_FILE, METADATA_FILE } from '@deepseek-ai/dsh-agent-presets'
+import AgentPresets from '@deepseek-ai/dsh-agent-presets'
+import FilesystemAgentPresetSource, {
+  COMPOSITION_FILE, METADATA_FILE, type Config as SourceConfig,
+} from '@deepseek-ai/dsh-agent-presets-filesystem'
 import type { Config } from '@deepseek-ai/dsh-agent-presets'
 import type {} from '@deepseek-ai/dsh-agent-presets/types'
 
@@ -64,7 +67,9 @@ function reasonOf(failure: RemoteFailure): string {
 }
 
 async function harness(
-  roster: Config = { default: 'standard', roots: ROOTS, includeShippedRoot: false, includeUserRoot: false },
+  roster: Config & SourceConfig = {
+    default: 'standard', roots: ROOTS, includeShippedRoot: false, includeUserRoot: false,
+  },
 ): Promise<Context> {
   const ctx = new Context()
   ctx.baseUrl = pathToFileURL(FIXTURES).href + '/'
@@ -76,7 +81,9 @@ async function harness(
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(AgentRegistry)
   await ctx.plugin(AgentLoop, { agents: [] })
-  await ctx.plugin(AgentPresets, roster)
+  const { default: defaultId, ...source } = roster
+  await ctx.plugin(FilesystemAgentPresetSource, source)
+  await ctx.plugin(AgentPresets, { default: defaultId })
   return ctx
 }
 

@@ -1,5 +1,6 @@
 import { createHmac } from 'node:crypto'
-import { createServer, request as httpRequest, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { createServer, request as httpRequest, type Server } from 'node:http'
+import { toFetchRequest, writeFetchResponse } from '@deepseek-ai/dsh-host-webserver-node'
 import type { AddressInfo } from 'node:net'
 import type { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -43,7 +44,11 @@ async function serve(ctx: Context, maxBodyBytes = 1024): Promise<string> {
     secretEnv: credentialRef('DSH_GITHUB_WEBHOOK_SECRET'),
     maxBodyBytes,
   })
-  const server = createServer((request, response) => { void handler(request, response) })
+  const server = createServer((request, response) => {
+    void (async () => {
+      await writeFetchResponse(await handler(toFetchRequest(request, response)), response)
+    })()
+  })
   servers.push(server)
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const port = (server.address() as AddressInfo).port
@@ -166,11 +171,8 @@ describe('GitHub webhook HTTP handler', () => {
       secretEnv: credentialRef('DSH_GITHUB_WEBHOOK_SECRET'),
       maxBodyBytes: 1024,
     })
-    const request = { method: 'POST', headers: {}, headersDistinct: {} } as unknown as IncomingMessage
-    const writeHead = vi.fn()
-    const response = { setHeader: vi.fn(), writeHead, end: vi.fn() } as unknown as ServerResponse
-    await handler(request, response)
-    expect(writeHead).toHaveBeenCalledWith(415, expect.any(Object))
+    const response = await handler(new Request('http://dsh.internal/webhook', { method: 'POST' }))
+    expect(response.status).toBe(415)
     expect(fake.dispatch).not.toHaveBeenCalled()
   })
 
@@ -181,21 +183,19 @@ describe('GitHub webhook HTTP handler', () => {
       secretEnv: credentialRef('DSH_GITHUB_WEBHOOK_SECRET'),
       maxBodyBytes: 1024,
     })
-    const request = {
+    // Fetch joins repeated headers with `, `; the handler refuses that value
+    // because GitHub never sends one.
+    const response = await handler(new Request('http://dsh.internal/webhook', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      headersDistinct: {
-        'x-hub-signature-256': ['sha256=unused'],
-        'x-github-delivery': ['delivery-1'],
-        'x-github-event': ['pull_request', 'ping'],
+      headers: {
+        'content-type': 'application/json',
+        'x-hub-signature-256': 'sha256=unused',
+        'x-github-delivery': 'delivery-1',
+        'x-github-event': 'pull_request, ping',
       },
-      complete: true,
-      async * [Symbol.asyncIterator]() { yield Buffer.from('{}') },
-    } as unknown as IncomingMessage
-    const writeHead = vi.fn()
-    const response = { setHeader: vi.fn(), writeHead, end: vi.fn() } as unknown as ServerResponse
-    await handler(request, response)
-    expect(writeHead).toHaveBeenCalledWith(400, expect.any(Object))
+      body: '{}',
+    }))
+    expect(response.status).toBe(400)
     expect(fake.dispatch).not.toHaveBeenCalled()
   })
 

@@ -62,6 +62,7 @@ const SENTENCE_MODEL_EXPERIENCE: Readonly<Record<string, SentenceContract>> = {
   'packages/typert/registry': { kind: 'none', reason: 'Runtime type registry; consumers (cordis_inspect, wire faces, gates) own any model-visible projection of registry contents.' },
   'packages/identity/principal': { kind: 'none', reason: 'Identity value types and one pure object-name function; request assembly reads neither.' },
   'packages/identity/principal-local': { kind: 'none', reason: 'Answers which principal a request acts as; request assembly reads no part of that answer.' },
+  'packages/cf/principal-jwt': { kind: 'none', reason: 'Verifies a token and answers which principal a request acts as; request assembly reads no part of that answer.' },
   'packages/typert/loader': { kind: 'none', reason: 'Loader integration only registers generated artifacts; consumers own any model-visible projection.' },
   'packages/e2b/e2b': { kind: 'none', reason: 'The shared remote-runtime owner registers no model context; provider adapters and consumers own rendered effects.' },
   'packages/client/hmr': { kind: 'none', reason: 'Browser-side UI plugin layer; registers nothing model-facing.' },

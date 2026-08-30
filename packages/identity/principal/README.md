@@ -50,6 +50,8 @@ hostObjectName({ org: OrganizationId('org_a'), subject: { kind: 'user', user: Us
 
 Call this rather than assembling the string; it is the only place the name is built. Identity-service identifiers cannot contain `:`, so the segments parse unambiguously.
 
+`parseHostObjectName` reads one back. A Durable Object addressed by `hostObjectName` recovers its own principal from its own identity rather than from anything a request claims, which is what the Cloudflare provider does; a name from another namespace throws rather than resolving to a principal this build can serve.
+
 <a id="understand-the-implementation"></a>
 ## Understand the implementation
 

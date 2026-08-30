@@ -780,8 +780,12 @@
       "entry": [
         "src/worker.ts",
         "scripts/*.mjs",
-        "tests/workerd/**/*.workerd.ts"
+        "tests/workerd/**/*.workerd.ts",
+        "tests/workerd/edge/entry.ts",
+        "tests/browser/**/*.e2e.ts"
       ],
+      // `cloudflare:workers` is a workerd built-in module, not a package to depend on.
+      "ignoreDependencies": ["cloudflare"],
       "project": [
         "src/**/*.ts",
         "scripts/**/*.mjs",

@@ -81,9 +81,9 @@ Required rather than optional, because an optional owner makes "a session with n
 
 The work lands in three slices, so the deployment is never half-keyed and no slice carries a value the next one deletes.
 
-The first slice adds `packages/identity/principal` and `packages/identity/principal-local`, and deletes `privilegedHosts` from `apps/cf-web/scripts/compose.mjs`.
+The first slice adds `packages/identity/principal` and `packages/identity/principal-local`, and deletes `privilegedHosts` from `apps/cf-web/scripts/compose.mjs`. It has shipped.
 
-The second slice adds `packages/cf/principal-jwt`, moves verification into the Worker's `fetch` handler, and moves `apps/cf-web/src/worker.ts` from `HOST_NAME` to `hostObjectName(principal)`. Those three are one change rather than three: until a provider verifies a token, the Worker has nowhere honest to obtain a principal, and splitting them would introduce a deployment-configured principal that the next commit deletes.
+The second slice adds `packages/cf/principal-jwt`, moves verification into the Worker's `fetch` handler, and moves `apps/cf-web/src/worker.ts` from `HOST_NAME` to `hostObjectName(principal)`. Those three are one change rather than three: until a provider verifies a token, the Worker has nowhere honest to obtain a principal, and splitting them would introduce a deployment-configured principal that the next commit deletes. It has shipped, and it carried four things this note does not name, because none of them is visible until a browser is in front of the deployment: the browser sign-in path and the cookie the verified token arrives in, an explicit `browserAuth` choice on `client-connection` that replaces the launch token rather than layering on it, cross-origin headers on the identity service, and a Cloudflare provider that reads its principal off its object's own name rather than off a request. [The edge-verified principal note](../../implemented/architecture/2026-08-30-edge-verified-principal-and-the-browser-session.md) owns those decisions and what they cost.
 
 The third slice keys storage, settings, attachments, and spill by the same principal, adds the `SessionHeader` owner with its version bump, and moves `cf-sandbox` to per-session identifiers.
 

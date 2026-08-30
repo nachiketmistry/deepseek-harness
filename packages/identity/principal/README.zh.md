@@ -50,6 +50,8 @@ hostObjectName({ org: OrganizationId('org_a'), subject: { kind: 'user', user: Us
 
 请调用它，而不要自行拼接字符串；它是构造该名字的唯一位置。身份服务的标识符中不可能含有 `:`，因此各段解析无歧义。
 
+`parseHostObjectName` 把名字读回来。由 `hostObjectName` 寻址的 Durable Object 从自身身份、而非从请求所声称的任何东西中恢复出自己的 principal，Cloudflare 的 Provider 正是这样做的；来自另一个命名空间的名字会抛错，而不是解析成一个本构建能够服务的 principal。
+
 <a id="understand-the-implementation"></a>
 ## 理解实现
 

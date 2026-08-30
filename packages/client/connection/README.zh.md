@@ -32,7 +32,9 @@ kind: "package-reference"
 <a id="browser-authentication-and-request-trust"></a>
 ## 浏览器认证与请求信任
 
-每个 Host RPC 方法和 WebSocket stream 都要求同一个浏览器会话，不存在按方法区分的 loopback 层。每个进程生成一个随机启动令牌，除非 `launchTokenRef` 指明持有该部署自有令牌的凭据引用——没有终端可打印所生成令牌的界面改用它；被指明却解析不到的引用会让插件加载失败，短于 32 个字符的令牌会被拒绝。`dsh-web-app` 打印并打开带 `?token=...` 的普通根 URL；`frontend-static` 把根路径和 index 请求交给 `ctx.connection.authorizeIndex`，后者只在 `GET /` 接受该令牌，写入绑定 authority 的签名 cookie，再重定向到干净的 `/`。当 index 请求经 HTTPS 抵达时，cookie 带上 `Secure`。缺失、过期、畸形或 authority 不匹配的 cookie 会在 RPC 分发前得到 401。静态资源保持公开。HTTP 载体不在根路径交换之外接受 query token，也不接受 Authorization header token。
+由谁认证浏览器请求，是一个 `browserAuth` 选择，且它是部署事实而非偏好。默认的 `launch-token` 意味着由本 Host 认证，方式即下文所述的一切。`edge` 意味着部署的入口已经认证过，且本 Host 没有其他可抵达的路径：一个位于 Worker 之后、而该 Worker 在寻址任何东西之前先校验身份服务令牌的 Durable Object，正是它存在的理由。在 `edge` 下每个请求都被放行，`authenticatedUrl` 抛错——因为没有任何 URL 能让其持有者进入——而同时指明 `launchTokenRef` 会让插件加载失败，而不是悄悄选一个。下文的 `/api` Host 与 Origin 围栏在两种模式下都施加，也正是它回答了"浏览器在每个请求上都会发送的凭据"所带来的 CSRF 问题。
+
+本节其余部分描述 `launch-token`。每个 Host RPC 方法和 WebSocket stream 都要求同一个浏览器会话，不存在按方法区分的 loopback 层。每个进程生成一个随机启动令牌，除非 `launchTokenRef` 指明持有该部署自有令牌的凭据引用——没有终端可打印所生成令牌的界面改用它；被指明却解析不到的引用会让插件加载失败，短于 32 个字符的令牌会被拒绝。`dsh-web-app` 打印并打开带 `?token=...` 的普通根 URL；`frontend-static` 把根路径和 index 请求交给 `ctx.connection.authorizeIndex`，后者只在 `GET /` 接受该令牌，写入绑定 authority 的签名 cookie，再重定向到干净的 `/`。当 index 请求经 HTTPS 抵达时，cookie 带上 `Secure`。缺失、过期、畸形或 authority 不匹配的 cookie 会在 RPC 分发前得到 401。静态资源保持公开。HTTP 载体不在根路径交换之外接受 query token，也不接受 Authorization header token。
 
 cookie 签名密钥是 `ctx.credentials` 中由 `client-connection/browser-session` 拥有的 grant 记录。本地提供方把它持久化到 `$DSH_HOME/.credentials.yaml`；`BrowserAuth` 在 Connection 激活期间加载或创建该记录，并把密钥留在内存中，因此请求认证同步执行。删除或替换该记录会在下一次 Connection 激活时生效。cookie 携带绝对签发与过期区间，`cookieMaxAgeDays` 默认设为 30 天，并在确定性名称与签名 payload 中同时绑定规范化 hostname 和 port。它是 host-only、`Path=/`、`HttpOnly`、`SameSite=Strict`；随附服务器使用 loopback HTTP，因此那里不设置 `Secure`。
 

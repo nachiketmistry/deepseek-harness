@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-principal-jwt",
   "description": "Cloudflare principal provider: edge JWT verification against a cached JWKS, and the object's own verified principal",
-  "version": "0.1.1-rc.1",
+  "version": "0.1.2-alpha.1",
   "publishConfig": { "access": "public" },
   "repository": { "type": "git", "url": "git+https://github.com/deepseek-ai/deepseek-harness.git", "directory": "packages/cf/principal-jwt" },
   "type": "module",

@@ -10,15 +10,26 @@
 
 结果：完整树打包无任何未解析导入（gzip 0.98 MiB）；CF 目标组合 gzip 0.40 MiB，其 108 个包模块全部可在 workerd 下求值。目标组合中的每一处 Node 耦合都发生在调用时（某个 provider 在挂载时触碰磁盘、进程或监听套接字），这正是 `packages/cf/*` 的 Service Provider 在现有 Service Definition 之后所替换的部分。
 
-## 部署与登录
+## 登录，以及请求抵达哪个对象
 
-部署自行持有其启动 token，因为 Worker 没有终端可打印生成的 token，而平台会随时重启 Durable Object。首次部署前设置一次，作为不短于 32 个字符的 Worker secret：
+每个请求都在任何对象被寻址之前完成校验。Worker 对照按 isolate 缓存的密钥集检查身份服务的 JWT，随后寻址名为 `dsh:1:<orgId>:<userId>` 的 Host 对象——该名字属于这枚 token 所指名的 principal。不携带本部署所接受 token 的请求在边缘即被拒绝，触达不到任何 harness 表面；这正是让租户隔离成为结构性事实的原因：对象无法服务错误的 principal，因为它从未为其被寻址。
+
+身份服务是 [`apps/cf-auth`](../cf-auth/README.zh.md)，由 `wrangler.jsonc` 中的三个变量指名：边缘据以校验的 `AUTH_ISSUER` 与 `AUTH_JWKS_URL`，以及登录页所对话的 `AUTH_BASE_URL`。该服务自身的 `AUTH_TRUSTED_ORIGINS` 必须指名本部署的来源，否则浏览器会在页面看到之前丢弃它的响应。
+
+登录是一条浏览器流程，因此本部署从不经手密码。未认证的导航以 `401` 作答，登录页即是其响应体；页面向身份服务索取 token，将其 POST 到 `/__dsh/session`，Worker 校验之后作为 `dsh-principal` cookie 返还，该 cookie 与 token 同时过期。`/__dsh/signout` 清除该 cookie 并结束其背后的身份会话。对非浏览器的调用者，`Authorization: Bearer` 同样被接受。
+
+`connection` 以 `browserAuth: 'edge'` 组合（见 `scripts/compose.mjs`）：本 Host 不再为自己做任何认证，因为 Durable Object 只能经由那个已经拒绝了其他所有人的 Worker 抵达。它的 `/api` Host 与 Origin 围栏仍然运行，也正是它回答了"token 由 cookie 携带"所带来的 CSRF 问题。本部署过去持有的启动 token 已经不存在了。
+
+## 本地运行
 
 ```sh
-wrangler secret put DSH_LAUNCH_TOKEN
+pnpm --filter @deepseek-ai/dsh-cf-auth run dev    # the identity service on :8788
+pnpm --filter @deepseek-ai/dsh-cf-auth run seed   # alice@dev.invalid and bob@dev.invalid
+pnpm --filter @deepseek-ai/dsh-cf-web  run build
+pnpm --filter @deepseek-ai/dsh-cf-web  run dev    # the GUI on :8790
 ```
 
-`connection` 以 `launchTokenRef: DSH_LAUNCH_TOKEN` 组合（见 `scripts/compose.mjs`；`DSH_CF_LAUNCH_TOKEN_REF` 可在构建时改名），并经 Cloudflare 凭据存储解析，该存储会回退到同名的 Worker secret。secret 未设置的部署会让启动失败，而不是提供一个无人能进入的 GUI。登录方式是打开一次 `https://<公开主机>/?token=<该 secret>`：index 响应用该 token 换取浏览器会话 cookie，并重定向到干净的 `/`。cookie 的签名密钥是持久的，因此会话可跨 isolate 重启与重新部署存活。
+`scripts/dev.mjs` 把 Worker 指向本地身份服务，因为 `wrangler.jsonc` 指名的是已部署的那个，其 token 携带不同的 issuer，且由本地登录永远看不到的密钥集签名。把 `.dev.vars.example` 复制为 `.dev.vars`，即可给本地运行提供模型密钥；没有它 GUI 照常运行，而每次模型回合都会因缺少凭据而失败。
 
 ## 目录结构
 
@@ -28,7 +39,8 @@ wrangler secret put DSH_LAUNCH_TOKEN
 - `scripts/fidelity.mjs` 是该报告的另一半：它扫描每个替代 Provider 的源码，找出方法体为单条无条件 `throw`、空方法体，或单条返回缺省值的 `return`，除非处置方式声明了每一处，否则 `parity.mjs` 失败。挂载一个 Provider 与实现它并不是同一个论断。
 - `scripts/gate0.mjs`、`scripts/build-probe.mjs` 与 `tests/workerd/gate0-eval.workerd.ts` 是 gate 0 的两半。
 - `scripts/build.mjs` 把 `src/worker.ts` 打包为 `dist/worker.js`；`wrangler.jsonc` 部署这个预构建文件。
-- `tests/workerd/*.workerd.ts` 通过 `@cloudflare/vitest-pool-workers`（`vitest.workerd.config.ts`）在 workerd 内运行；仓库的 Node vitest 匹配模式不会命中该后缀。
+- `tests/workerd/*.workerd.ts` 通过 `@cloudflare/vitest-pool-workers`（`vitest.workerd.config.ts`）在 workerd 内运行；仓库的 Node vitest 匹配模式不会命中该后缀。两个 project：`deployment` 携带真实的 `wrangler.jsonc`，`edge` 携带 `wrangler.edge-test.jsonc`，其 Worker 是发货的边缘模块，之下是一个记录自己被以何名寻址的 Host 对象。组装后的 Worker 是 15 MiB 的打包插件树，池的运行时在加载它时会退出，因此对象的主体是唯一的替代物。
+- `tests/browser/*.e2e.ts`（`vitest.browser.config.ts`，`run test:browser`）以两个互相隔离的浏览器上下文驱动正在运行的 `wrangler dev` 与身份服务；两个服务器缺席时用例会跳过并说明原因。
 
 ## 已知限制与待办
 

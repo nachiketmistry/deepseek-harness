@@ -81,9 +81,9 @@ Postgres 持有 JWKS 私钥，这正是该服务的运行时宿主成为可移�
 
 工作分三片落地，让部署不会处在建了一半键的状态，也让任何一片都不承载下一片会删掉的值。
 
-第一片加入 `packages/identity/principal` 与 `packages/identity/principal-local`，并从 `apps/cf-web/scripts/compose.mjs` 删除 `privilegedHosts`。
+第一片加入 `packages/identity/principal` 与 `packages/identity/principal-local`，并从 `apps/cf-web/scripts/compose.mjs` 删除 `privilegedHosts`。它已发货。
 
-第二片加入 `packages/cf/principal-jwt`，把验证移进 Worker 的 `fetch` 处理器，并把 `apps/cf-web/src/worker.ts` 由 `HOST_NAME` 改为 `hostObjectName(principal)`。这三件事是一次变更而不是三次：在 provider 验证出令牌之前，Worker 无处诚实地取得 principal，而拆开它们会引入一个下一次提交就要删除的、由部署配置的 principal。
+第二片加入 `packages/cf/principal-jwt`，把验证移进 Worker 的 `fetch` 处理器，并把 `apps/cf-web/src/worker.ts` 由 `HOST_NAME` 改为 `hostObjectName(principal)`。这三件事是一次变更而不是三次：在 provider 验证出令牌之前，Worker 无处诚实地取得 principal，而拆开它们会引入一个下一次提交就要删除的、由部署配置的 principal。它已发货，并且携带了本笔记未曾指名的四件事，因为它们都要等到浏览器站在部署面前才会显现：浏览器登录路径与已校验令牌所栖身的 cookie、`client-connection` 上一个取代启动令牌而非叠加其上的显式 `browserAuth` 选择、身份服务上的跨源响应头，以及一个从对象自身名字而非从请求读出 principal 的 Cloudflare provider。[边缘校验 principal 的笔记](../../implemented/architecture/2026-08-30-edge-verified-principal-and-the-browser-session.zh.md)拥有这些决定及其代价。
 
 第三片把存储、设置、附件与溢出按同一个 principal 建键，加入带版本递增的 `SessionHeader` 归属者，并把 `cf-sandbox` 改为按会话的标识符。
 

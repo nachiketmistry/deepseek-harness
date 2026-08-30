@@ -20,6 +20,12 @@ JWT 携带 harness 使用的恰好两个声明：`sub` 是用户 id，`org` 是�
 
 `org` 在签名令牌时解析，而不是从会话的 `activeOrganizationId` 读取。注册会在个人组织存在之前约一秒创建会话，于是会话创建钩子找不到成员关系，把该列留为 null；由它签发的令牌将不指名任何组织。一旦用户有可选的活动组织，所选的活动组织仍然优先。若某个用户不属于任何组织，本服务会拒绝签发令牌，而不是交出一个边缘随后会拒绝的令牌，这样故障由造成它的服务来报告。
 
+## 从另一个来源的浏览器抵达它
+
+harness 网页 GUI 由自己的来源提供，并对着本服务登录，这使登录流程成为一个携带凭据的跨源请求。Better Auth 的 `trustedOrigins` 决定哪些来源可以发起流程，自身不产出任何跨源响应头，因此本 Worker 亲自回答这些检查：它自行回应预检，并为 `AUTH_TRUSTED_ORIGINS` 清单上的调用者回显 `Access-Control-Allow-Origin`，附以 `Access-Control-Allow-Credentials` 与 `Vary: Origin`。回显来源而非通配，因为携带凭据的请求拒绝通配符。
+
+不在 `AUTH_TRUSTED_ORIGINS` 中的来源得不到任何响应头，于是浏览器会在页面看到之前丢弃响应。当登录页一片空白而其控制台报告 CORS 拒绝时，要找的正是这个故障。
+
 ## Schema
 
 `migrations/0001-init.sql` 由本应用自己的 `authOptions` 生成，因此 schema 与运行中的服务不会发生漂移；它先被提交与评审，然后才被应用，而不是由 CLI 就地推送。
@@ -56,4 +62,5 @@ Google 客户端的值只需存在即可，因为该 Worker 在服务任何路�
 - **teams 被推迟** —— 不创建任何 teams 表。若日后启用，任何代码都不得按 team 建储存键：更换 team 的用户不得因此丢失其会话。
 - **实践中每位用户一个组织** —— 用户恰好属于一个个人组织，且没有创建或加入另一个的流程。因此 `org` 声明今天对每位用户是稳定的，harness 依赖这一点。
 - **e2e 套件不做类型检查** —— `tsconfig.json` 是 workerd 程序，只覆盖 `src`；而 `tests/principal-token.e2e.ts` 属于 Node，并触达 Worker 程序刻意看不到的 workspace 包。它靠运行来验证，而不是靠 `pnpm run typecheck`。
+- **cookie 尚未为跨站做好准备** —— Better Auth 的会话 cookie 是 `SameSite=Lax`，浏览器只有在两者同站时才会从另一个来源把它发给本服务。对 `localhost` 上的两个端口成立；对两个 `*.workers.dev` 子域不成立，因为 `workers.dev` 位于 Public Suffix List 上。跨站部署需要先在此处改为 `SameSite=None`，其登录页才能工作。
 - **没有账号删除路径** —— 在 Postgres 中删除用户不会告知 harness，而 harness 的 Durable Object 正以由这些已不存在的 id 派生的名字持有该用户的会话。

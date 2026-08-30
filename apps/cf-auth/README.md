@@ -20,6 +20,12 @@ The JWT carries exactly two claims the harness uses: `sub` is the user id and `o
 
 `org` is resolved when the token is signed, not read from the session's `activeOrganizationId`. Signup creates the session about a second before the personal organization exists, so the session-creation hook finds no membership and leaves that column null; a token issued from it would name no organization. A selected active organization still wins once a user has one to select. A user who somehow belongs to no organization is refused a token here rather than handed one the edge would reject, so the fault is reported by the service that caused it.
 
+## Reaching it from a browser on another origin
+
+The harness web GUI is served from its own origin and signs in against this one, which makes the sign-in flow a cross-origin request carrying credentials. Better Auth's `trustedOrigins` decides which origins may start a flow and emits no cross-origin headers of its own, so this Worker answers those checks: it replies to preflights itself and echoes `Access-Control-Allow-Origin` for a caller on `AUTH_TRUSTED_ORIGINS`, with `Access-Control-Allow-Credentials` and `Vary: Origin`. The origin is echoed rather than wildcarded, because a credentialed request refuses the wildcard.
+
+An origin missing from `AUTH_TRUSTED_ORIGINS` gets no headers, so the browser discards the response before the page sees it. That is the failure to look for when a sign-in page shows nothing and its console reports a CORS refusal.
+
 ## Schema
 
 `migrations/0001-init.sql` is generated from this app's own `authOptions`, so the schema and the running service cannot drift, and it is committed and reviewed before it is applied rather than pushed in place by a CLI.
@@ -56,4 +62,5 @@ Those stored private keys are **encrypted with `BETTER_AUTH_SECRET`**, so the da
 - **Teams are deferred** — no teams tables are created. If they are ever enabled, nothing may key storage by team: a user who changes team must not lose their sessions.
 - **One organization per user in practice** — a user belongs to exactly one personal organization, and there is no flow to create or join another. The `org` claim is therefore stable per user today, which the harness relies on.
 - **The e2e suite is not typechecked** — `tsconfig.json` is the workerd program and covers `src` only, while `tests/principal-token.e2e.ts` is Node and reaches workspace packages the Worker program deliberately cannot see. It is verified by running it, not by `pnpm run typecheck`.
+- **Cookies are not cross-site ready** — Better Auth's session cookie is `SameSite=Lax`, which a browser sends to this service from another origin only while the two are same-site. That holds for two ports on `localhost`; it does not hold for two `*.workers.dev` subdomains, because `workers.dev` is on the Public Suffix List. A cross-site deployment needs `SameSite=None` here before its sign-in page works.
 - **No account-deletion path** — deleting a user in Postgres does not inform the harness, whose Durable Object holds that user's sessions under a name derived from ids that no longer exist.

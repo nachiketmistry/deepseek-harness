@@ -79,9 +79,13 @@ Required rather than optional, because an optional owner makes "a session with n
 
 ### Rollout
 
-The work lands in two slices so the deployment is never half-keyed.
+The work lands in three slices, so the deployment is never half-keyed and no slice carries a value the next one deletes.
 
-The first slice adds the seam with all three roles, deletes `privilegedHosts` from `apps/cf-web/scripts/compose.mjs`, and moves `apps/cf-web/src/worker.ts` from `HOST_NAME` to `hostObjectName(principal)`. The second slice keys storage, settings, attachments, and spill by the same principal, adds the `SessionHeader` owner with its version bump, and moves `cf-sandbox` to per-session identifiers.
+The first slice adds `packages/identity/principal` and `packages/identity/principal-local`, and deletes `privilegedHosts` from `apps/cf-web/scripts/compose.mjs`.
+
+The second slice adds `packages/cf/principal-jwt`, moves verification into the Worker's `fetch` handler, and moves `apps/cf-web/src/worker.ts` from `HOST_NAME` to `hostObjectName(principal)`. Those three are one change rather than three: until a provider verifies a token, the Worker has nowhere honest to obtain a principal, and splitting them would introduce a deployment-configured principal that the next commit deletes.
+
+The third slice keys storage, settings, attachments, and spill by the same principal, adds the `SessionHeader` owner with its version bump, and moves `cf-sandbox` to per-session identifiers.
 
 ## Alternatives considered
 

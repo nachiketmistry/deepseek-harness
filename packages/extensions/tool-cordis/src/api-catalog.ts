@@ -1430,6 +1430,19 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'principal',
+    summary: 'Resolves the verified principal for the current request.',
+    description: 'Resolves the verified principal for the current request. Implementations locate an answer that something upstream already established; none of them owns the principal\'s lifetime, and none of them authenticates.',
+    methods: [
+      {
+        signature: 'abstract current(): Principal',
+        description: 'The principal this request acts as.',
+        parameters: [],
+        returns: 'the verified principal.',
+      },
+    ],
+  },
+  {
     key: 'sandbox',
     summary: 'Abstract process-sandbox service.',
     description: 'Abstract process-sandbox service. confine must return enforcing argv or fail closed at wrap or runner-execution time; silent unconfined passthrough is forbidden. Functional probes arbitrate multi-runner chains and may be skipped for a sole candidate, whose own refusal remains the fail-closed end.',
@@ -4664,6 +4677,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface OneShotSubagentDescriptorData extends SubagentDescriptorBase {\n    readonly mode: \'one-shot\';\n    readonly label?: string;\n}',
   },
   {
+    name: 'OrganizationId',
+    declaration: 'export type OrganizationId = Branded<\'OrganizationId\'>;',
+  },
+  {
     name: 'PermissionSelect',
     declaration: 'export interface PermissionSelect {\n    options: PresetOption[];\n    currentValue: string;\n}',
   },
@@ -4718,6 +4735,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'PreToolDecision',
     declaration: 'export type PreToolDecision = {\n    kind: \'allow\';\n} | {\n    kind: \'deny\';\n    reason: string;\n} | {\n    kind: \'ask\';\n    reason?: string;\n};',
+  },
+  {
+    name: 'Principal',
+    declaration: 'export interface Principal {\n    readonly org: OrganizationId;\n    readonly subject: PrincipalSubject;\n}',
+  },
+  {
+    name: 'PrincipalSubject',
+    declaration: 'export type PrincipalSubject = {\n    readonly kind: \'user\';\n    readonly user: UserId;\n};',
   },
   {
     name: 'ProjectionChangeListener',
@@ -6074,6 +6099,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'UpdateTeamTaskRequest',
     declaration: 'export interface UpdateTeamTaskRequest {\n    readonly taskId: TeamTaskId;\n    readonly expectedRevision: number;\n    readonly action: TeamTaskAction;\n    readonly subject?: string;\n    readonly description?: string;\n    readonly blockedBy?: readonly TeamTaskId[];\n    readonly writeScopes?: readonly string[];\n    readonly owner?: string;\n}',
+  },
+  {
+    name: 'UserId',
+    declaration: 'export type UserId = Branded<\'UserId\'>;',
   },
   {
     name: 'UserMessage',

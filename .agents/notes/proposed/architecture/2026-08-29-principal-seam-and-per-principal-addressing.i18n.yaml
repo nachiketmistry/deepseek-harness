@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-08-29-principal-seam-and-per-principal-addressing.md
-2026-08-29-principal-seam-and-per-principal-addressing.md: 31319727013028c49c9ddb98527efb8aaad0eb4d
-2026-08-29-principal-seam-and-per-principal-addressing.zh.md: a2b89ed52aead2a2cb2f5550b51d351331279227
+2026-08-29-principal-seam-and-per-principal-addressing.md: b6660c56d0ef7078f3bf6df5604f2efed15ba0ad
+2026-08-29-principal-seam-and-per-principal-addressing.zh.md: 88737a50f745541ba9697bab5f34ef2fa8f9cf3f

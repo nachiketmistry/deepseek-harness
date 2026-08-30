@@ -2015,6 +2015,16 @@
       "doc": "packages/client/ui-conversation/README.md",
       "symbol": "ComposerChainProps",
       "source": "packages/client/ui-conversation/src/client/contract/slots.ts"
+    },
+    {
+      "doc": "docs/subsystems/identity.md",
+      "symbol": "Principal",
+      "source": "packages/identity/principal/src/types.ts"
+    },
+    {
+      "doc": "docs/subsystems/identity.md",
+      "symbol": "PrincipalSubject",
+      "source": "packages/identity/principal/src/types.ts"
     }
   ]
 }

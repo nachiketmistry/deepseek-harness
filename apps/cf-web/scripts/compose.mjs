@@ -43,7 +43,6 @@ function overrides(deployment) {
     // boot and printed to whoever started the process.
     ['connection', {
       trustedHosts: [deployment.publicHost],
-      privilegedHosts: [deployment.publicHost],
       launchTokenRef: deployment.launchTokenRef,
     }],
     ['storage-domain', { backend: 'do' }],

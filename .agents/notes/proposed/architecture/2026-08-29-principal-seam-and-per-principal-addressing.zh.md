@@ -79,9 +79,13 @@ Postgres 持有 JWKS 私钥，这正是该服务的运行时宿主成为可移�
 
 ### Rollout
 
-工作分两片落地，让部署不会处在建了一半键的状态。
+工作分三片落地，让部署不会处在建了一半键的状态，也让任何一片都不承载下一片会删掉的值。
 
-第一片加入三种角色齐备的 seam，从 `apps/cf-web/scripts/compose.mjs` 删除 `privilegedHosts`，并把 `apps/cf-web/src/worker.ts` 由 `HOST_NAME` 改为 `hostObjectName(principal)`。第二片把存储、设置、附件与溢出按同一个 principal 建键，加入带版本递增的 `SessionHeader` 归属者，并把 `cf-sandbox` 改为按会话的标识符。
+第一片加入 `packages/identity/principal` 与 `packages/identity/principal-local`，并从 `apps/cf-web/scripts/compose.mjs` 删除 `privilegedHosts`。
+
+第二片加入 `packages/cf/principal-jwt`，把验证移进 Worker 的 `fetch` 处理器，并把 `apps/cf-web/src/worker.ts` 由 `HOST_NAME` 改为 `hostObjectName(principal)`。这三件事是一次变更而不是三次：在 provider 验证出令牌之前，Worker 无处诚实地取得 principal，而拆开它们会引入一个下一次提交就要删除的、由部署配置的 principal。
+
+第三片把存储、设置、附件与溢出按同一个 principal 建键，加入带版本递增的 `SessionHeader` 归属者，并把 `cf-sandbox` 改为按会话的标识符。
 
 ## Alternatives considered
 

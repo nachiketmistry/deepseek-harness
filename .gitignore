@@ -1,5 +1,8 @@
 CLAUDE.local.md
 .env
+.dev.vars*
+!.dev.vars.example
+.wrangler/
 node_modules/
 lib/
 *.tsbuildinfo

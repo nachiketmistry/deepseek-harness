@@ -31,6 +31,16 @@ DATABASE_URL="<neon direct url>" pnpm run migrate   # apply the reviewed file
 
 两者的 `DATABASE_URL` 都是 Neon 的**直连**连接串。生成与迁移都从 Node 运行，不得经由 Hyperdrive——后者的存在是为了服务 Worker。
 
+## Local development
+
+`pnpm run dev` 在 workerd 上以 `http://localhost:8788` 提供该 Worker，`pnpm run seed` 创建固定账号 `alice@dev.invalid` 与 `bob@dev.invalid`，并打印各自的 `org`、`sub` 和一个可用令牌。播种是幂等的：已存在的账号会被登录而不是重建，因此 principal 在重启之间保持稳定，可当作固定装置使用。两个脚本都读取 `.dev.vars`，该文件已被 gitignore；复制 `.dev.vars.example` 并填写即可。
+
+请把 `DSH_CF_AUTH_DEV_DATABASE_URL` 指向一个用完即弃的 Neon 分支，绝不要指向部署所用的数据库，原因见 Bindings 一节：以本地密钥签名会留下部署无法解密的 `jwks` 行。
+
+有两件事 `wrangler dev` 无法自行推断，均由 `pnpm run dev` 处理。Secrets Store 绑定解析到的本地存储起初为空，且 `.dev.vars` 并不会填充它，因此每个值都在服务器启动前被镜像进去。Hyperdrive 没有本地连接池，因此数据库连接串以 `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE` 传入，wrangler 从自身环境读取它，而不是从绑定读取。
+
+Google 客户端的值只需存在即可，因为该 Worker 在服务任何路由之前都会读取全部三个密钥；Google 流程本身需要已注册的重定向 URI，本地不作演练。播种会发送 `Origin` 头——浏览器始终发送而 Node 的 `fetch` 从不发送——因此它会像真实客户端一样接受 `trustedOrigins` 的检查。
+
 ## Bindings
 
 `HYPERDRIVE` 指向 Neon 的直连端点，而不是其 pooler：Hyperdrive 自己维护区域连接池，把它叠在 Neon 的 PgBouncer 上等于给池再套一个池。Postgres 驱动需要 `nodejs_compat`，因为 Hyperdrive 经由 `node:net` 讲 TCP。

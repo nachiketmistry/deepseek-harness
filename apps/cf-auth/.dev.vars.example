@@ -1,0 +1,21 @@
+# Copy to `.dev.vars` and fill in. Gitignored; never the deployment's values.
+#
+# BETTER_AUTH_SECRET and the database are ONE UNIT: Better Auth encrypts JWKS
+# private keys with this secret, so a database whose `jwks` rows were written
+# under a different one fails every token request with a 500. Point
+# DSH_CF_AUTH_DEV_DATABASE_URL at a throwaway Neon branch, never at the
+# deployment's database.
+BETTER_AUTH_SECRET="run: node -e 'console.log(require(\"node:crypto\").randomBytes(32).toString(\"base64url\"))'"
+
+# Only needed to exercise the Google flow, which also requires this origin to be
+# a registered redirect URI. Email and password sign-up works without them.
+GOOGLE_CLIENT_ID="local-dev-unused"
+GOOGLE_CLIENT_SECRET="local-dev-unused"
+
+# A throwaway Neon branch, migrated with `pnpm run migrate`.
+DSH_CF_AUTH_DEV_DATABASE_URL="postgresql://user:password@host.neon.tech/dsh_auth?sslmode=require"
+
+# Override the deployed origins from wrangler.jsonc: Better Auth signs cookies
+# and builds redirects against its base URL, so a local run must name itself.
+AUTH_BASE_URL="http://localhost:8788"
+AUTH_TRUSTED_ORIGINS="http://localhost:8788"

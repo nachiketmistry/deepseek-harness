@@ -31,6 +31,16 @@ DATABASE_URL="<neon direct url>" pnpm run migrate   # apply the reviewed file
 
 `DATABASE_URL` is Neon's **direct** connection string for both. Generation and migration run from Node and must not go through Hyperdrive, which exists to serve the Worker.
 
+## Local development
+
+`pnpm run dev` serves the Worker on workerd at `http://localhost:8788`, and `pnpm run seed` creates the fixed accounts `alice@dev.invalid` and `bob@dev.invalid`, printing each one's `org`, `sub`, and a live token. Seeding is idempotent: an account that already exists is signed in rather than recreated, so the principals stay stable across restarts and can be used as fixtures. Both scripts read `.dev.vars`, which is gitignored; copy `.dev.vars.example` and fill it in.
+
+Point `DSH_CF_AUTH_DEV_DATABASE_URL` at a throwaway Neon branch, never at the deployment's database, for the reason the Bindings section gives: signing under a local secret leaves `jwks` rows the deployment cannot decrypt.
+
+Two things `wrangler dev` cannot work out for itself, both handled by `pnpm run dev`. A Secrets Store binding resolves against a local store that starts empty and that `.dev.vars` does not populate, so each value is mirrored into it before the server starts. Hyperdrive has no local pool, so the database connection string is passed as `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE`, which wrangler reads from its own environment rather than from a binding.
+
+The Google client values only have to be present, because the Worker reads all three secrets before serving any route; the Google flow itself needs a registered redirect URI and is not exercised locally. Seeding sends an `Origin` header, which browsers always send and Node's `fetch` never does, so it is checked against `trustedOrigins` exactly as a real client is.
+
 ## Bindings
 
 `HYPERDRIVE` points at Neon's direct endpoint, not its pooler: Hyperdrive maintains its own regional pool, and stacking it on Neon's PgBouncer pools a pool. The Postgres driver needs `nodejs_compat`, because Hyperdrive speaks TCP through `node:net`.

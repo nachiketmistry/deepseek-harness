@@ -13,6 +13,8 @@
   "type": "module",
   "scripts": {
     "schema": "node --import tsx/esm scripts/schema.mjs",
+    "dev": "node scripts/dev.mjs",
+    "seed": "node scripts/seed.mjs",
     "migrate": "node scripts/migrate.mjs",
     "deploy": "wrangler deploy",
     "typecheck": "tsc -p tsconfig.json"

@@ -18,15 +18,16 @@ import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { expandHomePath } from '@deepseek-ai/dsh-home-paths'
 import { METADATA_FILE, renderPresetMetadata } from './metadata.ts'
 import {
-  InvalidPresetIdError, PRESET_ID, PresetExistsError, PresetNotWritableError, type AgentPreset,
+  InvalidPresetIdError, PRESET_ID, PresetExistsError, PresetNotWritableError,
+  type AgentPreset,
 } from '@deepseek-ai/dsh-agent-presets'
 import type { PresetRoot } from './root.ts'
 
 /**
- * The root locally authored presets are written to.
- * @param roots - the configured roots in precedence order.
- * @returns the absolute path of the first `user` root.
- * @throws when the deployment configured no writable root.
+ * The single root locally authored presets are written to.
+ * @param roots - the roster's roots in precedence order.
+ * @returns the first `user` root's path.
+ * @throws {PresetNotWritableError} when the deployment configures none.
  */
 export function writableRoot(roots: readonly PresetRoot[]): string {
   const root = roots.find(candidate => candidate.trust === 'user')

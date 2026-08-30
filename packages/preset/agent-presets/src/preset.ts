@@ -117,3 +117,47 @@ export class PresetMountError extends Error {
     super(`agent-presets: preset "${presetId}" failed to mount: ${reason}`, options)
   }
 }
+
+/** A preset id that cannot be used as a directory name under a root. */
+export class InvalidPresetIdError extends Error {
+  constructor(
+    /** The rejected id. */
+    readonly presetId: string,
+  ) {
+    super(
+      `agent-presets: preset id ${JSON.stringify(presetId)} must match ${String(PRESET_ID)} — `
+      + 'the id is a directory name, so anything else could escape the preset root',
+    )
+  }
+}
+
+/** A copy target that is already occupied — a copy never overwrites. */
+export class PresetExistsError extends Error {
+  constructor(
+    /** The id that is already taken. */
+    readonly presetId: string,
+  ) {
+    super(
+      `agent-presets: preset "${presetId}" already exists — `
+      + 'a copy never overwrites; delete the existing preset first or choose another id',
+    )
+  }
+}
+
+/** Authoring was attempted where the deployment allows none. */
+export class PresetNotWritableError extends Error {
+  constructor(
+    /** What the caller tried to change, for the diagnostic. */
+    readonly presetId: string,
+    reason: string,
+  ) {
+    super(`agent-presets: preset "${presetId}" cannot be written: ${reason}`)
+  }
+}
+
+/**
+ * The root locally authored presets are written to.
+ * @param roots - the configured roots in precedence order.
+ * @returns the absolute path of the first `user` root.
+ * @throws when the deployment configured no writable root.
+ */

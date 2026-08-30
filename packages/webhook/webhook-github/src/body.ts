@@ -1,7 +1,5 @@
 /** Bounded raw HTTP body intake for GitHub signature verification. */
 
-import type { IncomingMessage } from 'node:http'
-
 /** HTTP refusal whose message is safe to return without request data. */
 export class WebhookHttpError extends Error {
   override readonly name = 'WebhookHttpError'
@@ -15,9 +13,9 @@ export class WebhookHttpError extends Error {
 }
 
 /** Parse a decimal Content-Length or reject an ambiguous header. */
-function contentLength(request: IncomingMessage): number | undefined {
-  const value = request.headers['content-length']
-  if (value === undefined) return undefined
+function contentLength(request: Request): number | undefined {
+  const value = request.headers.get('content-length')
+  if (value === null) return undefined
   if (!/^(0|[1-9]\d*)$/.test(value)) {
     throw new WebhookHttpError(400, 'invalid Content-Length')
   }
@@ -28,40 +26,49 @@ function contentLength(request: IncomingMessage): number | undefined {
 
 /**
  * Read one request body as exact, bounded UTF-8 text.
- * @param request - incoming request before any parser consumes it.
+ * @param request - the request whose body no other reader has consumed.
  * @param maxBodyBytes - positive byte ceiling.
  * @returns the decoded body after EOF.
  * @throws {WebhookHttpError} for invalid length, excessive bytes, invalid UTF-8, or an aborted stream.
  */
 export async function readBoundedUtf8Body(
-  request: IncomingMessage,
+  request: Request,
   maxBodyBytes: number,
 ): Promise<string> {
   const declared = contentLength(request)
   if (declared !== undefined && declared > maxBodyBytes) {
-    request.resume()
     throw new WebhookHttpError(413, 'request body is too large')
   }
 
-  const chunks: Buffer[] = []
+  const chunks: Uint8Array[] = []
   let size = 0
-  try {
-    for await (const raw of request) {
-      const chunk = Buffer.isBuffer(raw) ? raw : Buffer.from(raw as string)
-      size += chunk.byteLength
-      if (size > maxBodyBytes) {
-        request.resume()
-        throw new WebhookHttpError(413, 'request body is too large')
+  const body = request.body
+  if (body !== null) {
+    const reader = body.getReader()
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        size += value.byteLength
+        if (size > maxBodyBytes) {
+          await reader.cancel()
+          throw new WebhookHttpError(413, 'request body is too large')
+        }
+        chunks.push(value)
       }
-      chunks.push(chunk)
+    } catch (error: unknown) {
+      if (error instanceof WebhookHttpError) throw error
+      throw new WebhookHttpError(400, 'request body was aborted')
     }
-  } catch (error: unknown) {
-    if (error instanceof WebhookHttpError) throw error
-    throw new WebhookHttpError(400, 'request body was aborted')
   }
-  if (!request.complete) throw new WebhookHttpError(400, 'request body was aborted')
+  const joined = new Uint8Array(size)
+  let offset = 0
+  for (const chunk of chunks) {
+    joined.set(chunk, offset)
+    offset += chunk.byteLength
+  }
   try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks, size))
+    return new TextDecoder('utf-8', { fatal: true }).decode(joined)
   } catch {
     // TextDecoder is the only statement in the try; GitHub JSON must be valid UTF-8.
     throw new WebhookHttpError(400, 'request body is not valid UTF-8')

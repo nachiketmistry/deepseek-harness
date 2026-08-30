@@ -8,12 +8,18 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { ClientBundleSource, type ClientBundleDescription } from '@deepseek-ai/dsh-client-modules'
+import {
+  ClientBundleSource,
+  type ClientBundleDeclaration,
+  type ClientBundleSnapshot,
+  type ClientSourceMapSnapshot,
+  type ResolvedClientBundle,
+} from '@deepseek-ai/dsh-client-modules'
 
 /** One embedded client bundle. */
 export interface StaticClientBundle {
   /** The package's `dsh.client` declaration, minus `platform`. */
-  description: ClientBundleDescription
+  declaration: ClientBundleDeclaration
   /** The bundle source text. */
   code: string
   /** The source map text, when the build carried it. */
@@ -35,21 +41,37 @@ export class StaticClientBundleSource extends ClientBundleSource {
     super(ctx)
   }
 
-  override describe(packageName: string): ClientBundleDescription | undefined {
-    return this.table.get(packageName)?.description
+  // Every row in a packed composition names a package, so the row specifier IS
+  // the table key and the locator; there is nothing to resolve at runtime.
+  override resolve(loaderName: string): ResolvedClientBundle | undefined {
+    const entry = this.table.get(loaderName)
+    if (entry === undefined) return undefined
+    return { packageName: loaderName, declaration: entry.declaration, location: loaderName }
   }
 
-  override read(packageName: string): Uint8Array {
-    return this.encoder.encode(this.entry(packageName).code)
+  override snapshot(_packageName: string, location: string): ClientBundleSnapshot {
+    const bundle = Buffer.from(this.encoder.encode(this.entry(location).code))
+    return {
+      bundle,
+      // The table is immutable for the life of the artifact, so the baseline
+      // is a constant: nothing polls it and no write can race a read.
+      baseline: { path: this.locator(location), mtimeMs: 0, size: bundle.byteLength },
+    }
   }
 
-  override readSourceMap(packageName: string): Promise<Uint8Array | undefined> {
-    const map = this.entry(packageName).map
-    return Promise.resolve(map === undefined ? undefined : this.encoder.encode(map))
+  override readSourceMap(location: string): ClientSourceMapSnapshot | undefined {
+    const map = this.entry(location).map
+    if (map === undefined) return undefined
+    return { body: Buffer.from(this.encoder.encode(map)), parsed: JSON.parse(map) as Record<string, unknown> }
   }
 
-  override locate(packageName: string): string | undefined {
-    return this.table.has(packageName) ? `static:${packageName}/client.js` : undefined
+  /** No file backs an embedded bundle, so no watcher can poll one. */
+  override watchPath(): string | undefined {
+    return undefined
+  }
+
+  private locator(packageName: string): string {
+    return `static:${packageName}/client.js`
   }
 
   private entry(packageName: string): StaticClientBundle {

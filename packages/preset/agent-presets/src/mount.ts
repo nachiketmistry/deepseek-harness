@@ -14,12 +14,11 @@
  * @module @deepseek-ai/dsh-agent-presets/mount
  */
 
-import { pathToFileURL } from 'node:url'
-import { Context, type Fiber } from '@deepseek-ai/cordis'
-import { Include } from '@deepseek-ai/cordis-plugin-include'
-import type { EntryTree } from '@deepseek-ai/cordis-plugin-loader'
+import { Context, Service, type Fiber } from '@deepseek-ai/cordis'
+import { EntryGroup, EntryTree, type EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
 import { scopeOf, scopeParentOf, type ScopeKey } from '@deepseek-ai/dsh-scope'
 import { PresetMountError, type AgentPreset } from './preset.ts'
+import type { PresetComposition } from './source.ts'
 import { classifyRowSpecifier } from './specifier.ts'
 
 /** What one mounted subtree publishes about itself for the audit to read. */
@@ -44,27 +43,55 @@ const mounted = new WeakMap<object, MountedTree>()
 
 /**
  * The base URL bare specifiers resolve against, per pending mount, keyed by the
- * same config object. Recorded before the subtree is plugged, because `Include`
- * rewrites its own context's `baseUrl` to the composition's directory and the
+ * same config object. Recorded before the subtree is plugged, because the tree
+ * rebinds its own context's `baseUrl` to the composition's base and the
  * pre-mount value is the only handle on where the harness itself lives.
  */
 const harnessBase = new WeakMap<object, string>()
 
+/** Config of one mounted preset tree: the rows and where their relative specifiers resolve. */
+interface PresetTreeConfig {
+  /** Raw Loader entry options, one per row, owned by this tree once mounted. */
+  rows: EntryOptions[]
+  /** Base URL relative specifiers resolve against; absent when the source has no files. */
+  baseUrl?: string
+}
+
 /**
- * Include subclass that publishes its tree and fiber for the audit, and never
- * writes to the file it read.
+ * In-memory entry tree over the rows a source supplied, publishing its tree
+ * and fiber for the audit and never persisting anything.
+ *
+ * Unlike a file-backed tree, the rows arrive already parsed, so the tree is
+ * the same for every source — a preset directory, a bundled table — and the
+ * only file-specific fact it carries is the base URL relative specifiers
+ * resolve against.
  */
-class PresetTree extends Include {
-  constructor(ctx: Context, config: Include.Config) {
-    super(ctx, config)
+class PresetTree extends EntryTree {
+  static inject = ['loader']
+
+  // Tree-carrier marker (the Group and Include plugins declare the same): this
+  // config is an entry list, so the Loader's `internal/config` interpolation
+  // keeps it literal — a `!!js` expression inside a row's config belongs to
+  // that row's fiber, resolving lazily in the row's own context.
+  static readonly [EntryGroup.key] = true
+
+  constructor(ctx: Context, public config: PresetTreeConfig) {
+    super(ctx)
+    if (config.baseUrl !== undefined) this.ctx.baseUrl = config.baseUrl
     mounted.set(config, { tree: this, fiber: ctx.fiber })
+  }
+
+  /** Mount the rows; the disposer stops every row before the tree unwinds. */
+  async* [Service.init](): AsyncGenerator<() => Promise<void>> {
+    yield () => this.root.stop()
+    await this.root.update(this.config.rows)
   }
 
   /**
    * Resolve a bare specifier from the harness rather than from the preset.
    *
-   * `EntryTree.import()` resolves against the tree's own `baseUrl`, which
-   * `Include` sets to the composition's directory. That is right for a
+   * `EntryTree.import()` resolves against the tree's own `baseUrl`, which this
+   * tree sets to the composition's base. That is right for a
    * relative specifier — a preset's own files travel with it — and wrong for
    * a package name: a locally authored preset lives under the user's home,
    * where Node's upward `node_modules` walk never reaches the harness's own
@@ -99,13 +126,13 @@ class PresetTree extends Include {
    *
    * The Loader writes a tree back through this method whenever it decides the
    * config changed — a plugin self-disposing is enough, and tearing an agent
-   * down disposes its whole subtree. Inherited, that rewrites the preset file
-   * with whatever the dying tree held, which in practice means truncating a
-   * shipped composition to `[]` the first time a session ends. Persisting a
-   * preset is also meaningless: nothing here is user state, and the same file
-   * backs every session that names it.
+   * down disposes its whole subtree. A persisting tree would rewrite the
+   * composition with whatever the dying tree held, which in practice means
+   * truncating a shipped composition to `[]` the first time a session ends.
+   * Persisting a preset is also meaningless: nothing here is user state, and
+   * the same composition backs every session that names it.
    *
-   * Dropping the write drops the `loader/config-update` the inherited method
+   * Dropping the write drops the `loader/config-update` a persisting tree
    * emits with it. No consumer observes one for a preset subtree, and a
    * future "edit your preset while it runs" flow needs a deliberate
    * persistence path rather than this method's return.
@@ -356,10 +383,15 @@ function mountDetail(error: unknown): string {
  * the caller receives no disposer. A rejection leaves nothing mounted.
  * @param agentCtx - the agent's scope context, from the agent factory's `setup`.
  * @param preset - the resolved preset to compose the agent from.
+ * @param composition - the rows the source read for that preset.
  * @throws when `agentCtx` carries no scope, a row is unusable, or a row
  * published a service into the root realm.
  */
-export async function mountPreset(agentCtx: Context, preset: AgentPreset): Promise<void> {
+export async function mountPreset(
+  agentCtx: Context,
+  preset: AgentPreset,
+  composition: PresetComposition,
+): Promise<void> {
   const scope = scopeOf(agentCtx)
   if (scope === undefined) {
     throw new Error(
@@ -367,7 +399,10 @@ export async function mountPreset(agentCtx: Context, preset: AgentPreset): Promi
       + 'its registrations would apply to every agent in the process',
     )
   }
-  const config: Include.Config = { path: pathToFileURL(preset.path).href }
+  const config: PresetTreeConfig = {
+    rows: structuredClone(composition.rows),
+    ...composition.baseUrl === undefined ? {} : { baseUrl: composition.baseUrl },
+  }
   // Captured before the subtree exists: the standing scope context still
   // carries the host composition's base, which is inside the installed
   // harness and is therefore where a row's package name has to resolve from.

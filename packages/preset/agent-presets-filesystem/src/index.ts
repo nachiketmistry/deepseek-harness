@@ -22,10 +22,10 @@ import type { EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { AgentPresetSource, type AgentPreset, type PresetComposition } from '@deepseek-ai/dsh-agent-presets'
 import { copyComposition, deleteComposition, readComposition } from './authoring.ts'
-import { discoverPresets, USER_PRESET_DIR } from './discovery.ts'
+import { discoverPresets, SHIPPED_PRESET_ROOT, USER_PRESET_DIR } from './discovery.ts'
 import type { Config, PresetRoot } from './root.ts'
 
-export { COMPOSITION_FILE, discoverPresets, scanRoot, USER_PRESET_DIR } from './discovery.ts'
+export { COMPOSITION_FILE, discoverPresets, scanRoot, SHIPPED_PRESET_ROOT, USER_PRESET_DIR } from './discovery.ts'
 export { METADATA_FILE, readPresetMetadata, renderPresetMetadata, type PresetMetadata } from './metadata.ts'
 export { copyComposition, deleteComposition, readComposition, writableRoot } from './authoring.ts'
 export type { Config, PresetRoot } from './root.ts'
@@ -43,30 +43,58 @@ export class FilesystemAgentPresetSource extends AgentPresetSource {
       path: z.string().required(),
       trust: z.union(['system', 'user'] as const).default('user'),
     })).default([]),
+    includeShippedRoot: z.boolean().default(true),
     includeUserRoot: z.boolean().default(true),
   }) as z<Config>
 
   /**
-   * The roots discovery and authoring actually scan: every configured root in
-   * order, then the harness-home user root unless `includeUserRoot` is false.
+   * The roots discovery and authoring actually scan: this package's shipped
+   * root unless `includeShippedRoot` is false, every configured root in order,
+   * then the harness-home user root unless `includeUserRoot` is false.
    *
    * Derived once, because a root set that changed between `list()` and the
    * `copy()` acting on its answer would author into a directory the caller
-   * never saw. Appending rather than prepending keeps an earlier configured
-   * root winning a duplicate id, so a shipped preset still shadows a
-   * locally authored directory that claimed its name.
+   * never saw. The shipped root comes FIRST and the user root LAST because an
+   * earlier root wins a duplicate id: a shipped preset shadows any directory
+   * that claimed its name, and a configured root still shadows a locally
+   * authored one.
    */
   readonly roots: readonly PresetRoot[]
 
+  /**
+   * Where a row's package name resolves from: the base URL of the composition
+   * this source was loaded by, which is inside the installed harness.
+   *
+   * Health needs it because a preset's own directory is the wrong base for a
+   * package name — a locally authored preset lives under the user's home,
+   * where Node's upward `node_modules` walk never reaches the harness's
+   * dependencies. The mount resolves rows the same way; holding the same base
+   * here is what lets health answer the question before a session does.
+   */
+  private readonly harnessBase: string
+
   constructor(ctx: Context, public config: Config) {
     super(ctx)
-    this.roots = config.includeUserRoot
-      ? [...config.roots, { path: dshHomePath(USER_PRESET_DIR), trust: 'user' }]
-      : [...config.roots]
+    if (ctx.baseUrl === undefined) {
+      // Self-contained misconfiguration, so it fails at load: without a base
+      // this source cannot tell a healthy preset from one naming a package
+      // that is gone, and the silent alternative is the exact failure the
+      // health check exists to report.
+      throw new Error(
+        'agent-presets-filesystem: the source needs `ctx.baseUrl` to resolve the plugins a composition names; '
+        + 'compose it under a Loader, or set the base on the context this plugin is applied to',
+      )
+    }
+    this.harnessBase = ctx.baseUrl
+    this.roots = [
+      ...config.includeShippedRoot ? [{ path: SHIPPED_PRESET_ROOT, trust: 'system' } satisfies PresetRoot] : [],
+      ...config.roots,
+      ...config.includeUserRoot ? [{ path: dshHomePath(USER_PRESET_DIR), trust: 'user' } satisfies PresetRoot] : [],
+    ]
   }
 
   override async list(): Promise<AgentPreset[]> {
-    return await discoverPresets(this.roots)
+    return await discoverPresets(this.roots, this.harnessBase)
   }
 
   override async stamp(preset: AgentPreset): Promise<string | undefined> {

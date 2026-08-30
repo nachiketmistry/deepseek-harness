@@ -1,7 +1,6 @@
 /** GitHub HTTP authentication, parsing, and fire-and-forget dispatch. */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Webhooks } from '@octokit/webhooks'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 import { snapshotJsonValue } from '@deepseek-ai/dsh-session'
@@ -21,11 +20,15 @@ export interface GitHubWebhookHandlerConfig {
   readonly maxBodyBytes: number
 }
 
-/** Require one unambiguous non-empty request header. */
-function requiredHeader(request: IncomingMessage, name: string): string {
-  const values = request.headersDistinct[name]
-  const value = values?.[0]
-  if (values?.length !== 1 || value === undefined || value.trim() === '') {
+/**
+ * Require one unambiguous non-empty request header.
+ *
+ * Fetch joins repeated headers with `, `, so a duplicated header is rejected
+ * the same way node:http's per-name list was: it is never a value GitHub sent.
+ */
+function requiredHeader(request: Request, name: string): string {
+  const value = request.headers.get(name)
+  if (value === null || value.includes(',') || value.trim() === '') {
     throw new WebhookHttpError(400, `missing ${name} header`)
   }
   return value
@@ -41,15 +44,13 @@ function isJsonContentType(value: string | undefined): boolean {
   return extra.length === 0 && /^charset=(?:utf-8|"utf-8")$/i.test(parameter)
 }
 
-/** Send one empty or plain-text response exactly once. */
-function respond(response: ServerResponse, status: number, message?: string): void {
-  if (message === undefined) {
-    response.writeHead(status)
-    response.end()
-    return
-  }
-  response.writeHead(status, { 'content-type': 'text/plain; charset=utf-8' })
-  response.end(message)
+/** One empty or plain-text response. */
+function respond(status: number, message?: string, headers?: Record<string, string>): Response {
+  if (message === undefined) return new Response(null, { status, ...headers === undefined ? {} : { headers } })
+  return new Response(message, {
+    status,
+    headers: { 'content-type': 'text/plain; charset=utf-8', ...headers },
+  })
 }
 
 /** Convert a parsed value into the adapter's generic signed-object guarantee. */
@@ -79,13 +80,12 @@ export function createGitHubWebhookHandler(
   ctx: Context,
   config: GitHubWebhookHandlerConfig,
 ): WebRoute['handler'] {
-  return async (request, response) => {
+  return async (request) => {
     try {
       if (request.method !== 'POST') {
-        response.setHeader('allow', 'POST')
-        throw new WebhookHttpError(405, 'method not allowed')
+        return respond(405, 'method not allowed', { allow: 'POST' })
       }
-      if (!isJsonContentType(request.headers['content-type'])) {
+      if (!isJsonContentType(request.headers.get('content-type') ?? undefined)) {
         throw new WebhookHttpError(415, 'content type must be application/json')
       }
       const body = await readBoundedUtf8Body(request, config.maxBodyBytes)
@@ -117,14 +117,11 @@ export function createGitHubWebhookHandler(
         ctx.logger.warn('webhook-github: dispatch unavailable')
         throw new WebhookHttpError(503, 'webhook runtime is unavailable')
       }
-      respond(response, 202)
+      return respond(202)
     } catch (error: unknown) {
-      if (error instanceof WebhookHttpError) {
-        respond(response, error.status, error.message)
-        return
-      }
+      if (error instanceof WebhookHttpError) return respond(error.status, error.message)
       ctx.logger.warn('webhook-github: request failed')
-      respond(response, 503, 'webhook ingress is unavailable')
+      return respond(503, 'webhook ingress is unavailable')
     }
   }
 }

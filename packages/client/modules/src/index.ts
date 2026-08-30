@@ -24,19 +24,26 @@
  */
 
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, readFileSync, statSync } from 'node:fs'
-import type { IncomingMessage, ServerResponse } from 'node:http'
-import { createRequire } from 'node:module'
-import { dirname, isAbsolute, join } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Service } from '@deepseek-ai/cordis'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Entry } from '@deepseek-ai/cordis-plugin-loader'
 import type { IndexInjection } from '@deepseek-ai/dsh-host-webserver'
-import { optionalStringArray, stripClientSuffix } from './client/manifest.ts'
+import { stripClientSuffix } from './client/manifest.ts'
 import type { WebBootBatch, WebBootBatchPhase, WebBootEntry, WebBootGraph } from './client/manifest.ts'
+import {
+  CLIENT_BUNDLE_BUILD_INSTRUCTION,
+  MissingClientBundleError,
+  type ClientArtifactBaseline,
+  type ClientBundleDeclaration,
+  type ClientSourceMapSnapshot,
+} from './bundle-source.ts'
 
-export { stripClientSuffix } from './client/manifest.ts'
+export { optionalStringArray, stripClientSuffix } from './client/manifest.ts'
+export {
+  CLIENT_BUNDLE_BUILD_INSTRUCTION, ClientBundleSource, MissingClientBundleError,
+  type ClientArtifactBaseline, type ClientBundleDeclaration, type ClientBundleSnapshot,
+  type ClientSourceMapSnapshot, type ResolvedClientBundle,
+} from './bundle-source.ts'
 export type {
   BootManifest, BootModuleRow, BootPluginRow, WebBootBatch, WebBootBatchPhase, WebBootEntry, WebBootGraph,
 } from './client/manifest.ts'
@@ -48,43 +55,10 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
-/** package.json `dsh.client` declaration fields, validated one by one after reading the file. */
-interface DshClientDeclaration {
-  inject?: string[]
-  platform: string
-  /** Boot phase-one registration barrier; absent rows still ride the shared application batch. */
-  immediately?: boolean
-  /**
-   * Exact module-table requests beyond the implicit client baseline. Any
-   * specifier is valid, including subpaths such as `<pkg>/client`; each
-   * importing package declares its own exceptional requests. A type-only
-   * import is not a request because the transform erases it before resolution.
-   * Absent means the package uses only the baseline externals.
-   */
-  external?: string[]
-}
-
-/** The declared fields a graph row carries, normalized (absent array declarations become empty). */
-interface WebBootRowFields {
-  inject?: string[]
-  /** Module specifiers the package requests from the module table. */
-  external: string[]
-  immediately: boolean
-}
-
-/** Filesystem baseline captured before a client artifact snapshot is read. */
-export interface ClientArtifactBaseline {
-  /** Absolute path of the client bundle. */
-  readonly path: string
-  /** Bundle modification time in milliseconds. */
-  readonly mtimeMs: number
-  /** Bundle size in bytes. */
-  readonly size: number
-}
-
 /** Resolved metadata cached for one Loader specifier and owning-tree base URL until restart. */
-interface PkgMeta extends WebBootRowFields {
-  clientPath: string
+interface PkgMeta extends ClientBundleDeclaration {
+  /** Source-owned locator for this package's bundle. */
+  location: string
 }
 
 interface ResolvedPkgMeta {
@@ -102,27 +76,6 @@ interface ClientPackageSource extends ResolvedPkgMeta {
   sourceKey: string
 }
 
-/** Recovery instruction shared by grouped startup and steady-state bundle diagnostics. */
-const CLIENT_BUNDLE_BUILD_INSTRUCTION = 'run `pnpm run build` before launch'
-
-/** Missing built client export, retained as structured data for activation-error grouping. */
-class MissingClientBundleError extends Error {
-  constructor(
-    readonly packageName: string,
-    readonly clientPath: string,
-    cause: unknown,
-  ) {
-    super(
-      [
-        `client-modules: client bundle not found; ${CLIENT_BUNDLE_BUILD_INSTRUCTION}:`,
-        `  package: ${packageName}`,
-        `  path: ${clientPath}`,
-      ].join('\n'),
-      { cause },
-    )
-  }
-}
-
 /** Activation failures grouped by actionable package-build errors and unrelated failures. */
 class ClientPackageCompositionError extends AggregateError {
   constructor(failures: Error[]) {
@@ -133,7 +86,7 @@ class ClientPackageCompositionError extends AggregateError {
     if (missingBundles.length > 0) {
       lines.push(`  client bundles not found; ${CLIENT_BUNDLE_BUILD_INSTRUCTION}:`)
       for (const error of missingBundles) {
-        lines.push(`    - package: ${error.packageName}`, `      path: ${error.clientPath}`)
+        lines.push(`    - package: ${error.packageName}`, `      path: ${error.location}`)
       }
     }
     if (otherFailures.length > 0) {
@@ -156,7 +109,7 @@ interface WebPluginRecord {
   /** Pre-read filesystem baseline handed to the HMR watcher. */
   baseline: ClientArtifactBaseline
   /** Optional authored source map snapshot; generated-file identity mapping is the fallback. */
-  sourceMap?: { body: Buffer; parsed: Record<string, unknown> }
+  sourceMap?: ClientSourceMapSnapshot
 }
 
 /** Fields shared by every generated combo response. */
@@ -188,50 +141,8 @@ const SOURCE_MAP_TRAILER = /(?:\r?\n)?\/\/# sourceMappingURL=[^\r\n]*(?:\r?\n)?$
 /** Debugger source name appended to page bundles in the WebWorker image. */
 const SOURCE_URL_TRAILER = /(?:\r?\n)?\/\/# sourceURL=([^\r\n]+)(?:\r?\n)?$/
 
-/** Return a bare package-root specifier, excluding package subpaths and path-like entries. */
-function exactPackageSpecifier(specifier: string): string | undefined {
-  if (specifier.startsWith('@')) {
-    const parts = specifier.split('/')
-    return parts.length === 2 && parts.every(Boolean) ? specifier : undefined
-  }
-  return specifier.length > 0 && !specifier.includes('/') ? specifier : undefined
-}
 
-/** Narrow an unknown parsed JSON value to the `dsh.client` declaration, throwing on malformed fields. */
-function parseDshClient(pkgName: string, value: unknown): DshClientDeclaration | undefined {
-  if (value === undefined) return undefined
-  if (typeof value !== 'object' || value === null) {
-    throw new Error(`client-modules: ${pkgName} has a non-object dsh.client declaration`)
-  }
-  const decl = value as Record<string, unknown>
-  if (typeof decl.platform !== 'string') {
-    throw new Error(`client-modules: ${pkgName} dsh.client.platform must be a string`)
-  }
-  const inject = optionalStringArray(pkgName, 'dsh.client.inject', decl.inject)
-  const external = optionalStringArray(pkgName, 'dsh.client.external', decl.external)
-  if (decl.immediately !== undefined && typeof decl.immediately !== 'boolean') {
-    throw new Error(`client-modules: ${pkgName} dsh.client.immediately must be a boolean`)
-  }
-  return {
-    platform: decl.platform,
-    ...(inject !== undefined ? { inject } : {}),
-    ...(external !== undefined ? { external } : {}),
-    ...(decl.immediately !== undefined ? { immediately: decl.immediately } : {}),
-  }
-}
 
-/** Resolve `exports["./client"]` to a relative path, accepting the string and one-level conditional forms. */
-function clientExportOf(pkgName: string, exportsField: unknown): string | undefined {
-  if (typeof exportsField !== 'object' || exportsField === null) return undefined
-  const client = (exportsField as Record<string, unknown>)['./client']
-  if (client === undefined) return undefined
-  if (typeof client === 'string') return client
-  if (typeof client === 'object' && client !== null) {
-    const fallback = (client as Record<string, unknown>).default
-    if (typeof fallback === 'string') return fallback
-  }
-  throw new Error(`client-modules: ${pkgName} exports["./client"] must be a string or an object with a string default`)
-}
 
 /** sha1 content hash shortened to 12 hex chars (combo / graph / rebuilt-artifact rev). */
 function shortHash(input: string | Buffer): string {
@@ -315,30 +226,6 @@ function comboScript(input: string, sourceMapUrl?: string): Buffer {
   return Buffer.from(sourceMapUrl === undefined ? input : `${input}//# sourceMappingURL=${sourceMapUrl}\n`)
 }
 
-/** Parse an optional source-map artifact; missing maps do not prevent plugin execution. */
-function sourceMapSnapshot(clientPath: string): WebPluginRecord['sourceMap'] {
-  let body: Buffer
-  try {
-    body = readFileSync(`${clientPath}.map`)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
-    throw error
-  }
-  const value = JSON.parse(body.toString('utf8')) as unknown
-  const parsed = typeof value === 'object' && value !== null ? value as Record<string, unknown> : undefined
-  if (
-    parsed === undefined
-    || parsed.version !== 3
-    || !Array.isArray(parsed.sources)
-    || parsed.sources.some(source => typeof source !== 'string')
-    || !Array.isArray(parsed.names)
-    || parsed.names.some(name => typeof name !== 'string')
-    || typeof parsed.mappings !== 'string'
-  ) {
-    throw new Error(`client-modules: ${clientPath}.map is not a regular Source Map v3 object`)
-  }
-  return { body, parsed }
-}
 
 /** Count generated lines while assembling indexed-map section offsets. */
 function newlineCount(value: string): number {
@@ -414,7 +301,7 @@ function buildBatch(phase: WebBootBatchPhase, records: readonly WebPluginRecord[
 }
 
 /** Graph row for one bundle rev (url carries the rev as its cache-busting query). */
-function graphRow(id: string, rev: string, fields: WebBootRowFields): WebBootEntry {
+function graphRow(id: string, rev: string, fields: ClientBundleDeclaration): WebBootEntry {
   return {
     id,
     url: comboUrl([id], rev),
@@ -600,12 +487,13 @@ export class ClientModuleRegistry extends Service {
   }
 
   /**
-   * Absolute path of an entry's client bundle.
+   * Path a rebuild watcher polls for an entry's client bundle.
    * @param id - entry id (package name).
-   * @returns the path, or undefined for an unknown id.
+   * @returns the path, or undefined for an unknown id or a source with no file behind the bundle.
    */
   clientPath(id: string): string | undefined {
-    return this.table.get(id)?.meta.clientPath
+    const location = this.table.get(id)?.meta.location
+    return location === undefined ? undefined : this.ctx.clientBundleSource.watchPath(location)
   }
 
   /**
@@ -630,9 +518,8 @@ export class ClientModuleRegistry extends Service {
   rebuilt(id: string): string | undefined {
     const record = this.table.get(id)
     if (record === undefined) return undefined
-    const baseline = this.captureArtifactBaseline(record.meta.clientPath)
-    const bundle = readFileSync(record.meta.clientPath)
-    const sourceMap = this.readSourceMapSnapshot(record.meta.clientPath)
+    const { bundle, baseline } = this.ctx.clientBundleSource.snapshot(id, record.meta.location)
+    const sourceMap = this.sourceMapSnapshot(record.meta.location)
     const rev = artifactRevision(bundle, sourceMap)
     record.baseline = baseline
     if (rev === record.entry.rev) return rev
@@ -652,16 +539,6 @@ export class ClientModuleRegistry extends Service {
     }
     this.notifyGraphChanged()
     return rev
-  }
-
-  /**
-   * Subscribe to bundle rebuilds; fires only when the re-hash changed the rev.
-   * @param listener - receives the entry id and its new bundle rev.
-   * @returns the unsubscriber.
-   */
-  onRebuilt(listener: (id: string, rev: string) => void): () => void {
-    this.rebuildListeners.add(listener)
-    return () => { this.rebuildListeners.delete(listener) }
   }
 
   /**
@@ -734,169 +611,75 @@ export class ClientModuleRegistry extends Service {
       }
     }
   }
-
+  /**
+   * The browser package one Loader row contributes, cached per row until
+   * restart because the verdict cannot change while the process runs.
+   * @param loaderName - module specifier of the loader row.
+   * @param baseUrl - resolution base of the tree that owns the row.
+   * @returns the package and its declaration, or `null` when the row is not a client row.
+   */
   private resolveMeta(loaderName: string, baseUrl: string): ResolvedPkgMeta | null {
     const sourceKey = this.sourceKey(loaderName, baseUrl)
     const cached = this.pkgMeta.get(sourceKey)
     if (cached !== undefined) return cached
-    const located = this.locatePkgJson(loaderName, baseUrl)
-    if (located === undefined) {
-      // Not a resolvable package root: loader builtins (cordis:include) and
-      // subpath entries (…/gateway) land here — permanently not a client row.
+    const resolved = this.ctx.clientBundleSource.resolve(loaderName, baseUrl)
+    if (resolved === undefined) {
       this.pkgMeta.set(sourceKey, null)
       return null
     }
-    const { packageName, path: pkgPath } = located
-    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as Record<string, unknown>
-    const dsh = pkg.dsh
-    const decl = parseDshClient(
-      packageName,
-      dsh !== null && typeof dsh === 'object' ? (dsh as Record<string, unknown>).client : undefined,
-    )
-    if (decl === undefined || decl.platform !== 'web') {
-      this.pkgMeta.set(sourceKey, null)
-      return null
-    }
-    const clientRel = clientExportOf(packageName, pkg.exports)
-    if (clientRel === undefined) {
-      throw new Error(`client-modules: ${packageName} declares dsh.client but exports no "./client" bundle`)
-    }
-    const meta: PkgMeta = {
-      clientPath: join(dirname(pkgPath), clientRel),
-      ...(decl.inject !== undefined ? { inject: decl.inject } : {}),
-      external: decl.external ?? [],
-      immediately: decl.immediately === true,
-    }
-    const resolved = { packageName, meta }
-    this.pkgMeta.set(sourceKey, resolved)
-    return resolved
+    const { packageName, declaration, location } = resolved
+    const entry: ResolvedPkgMeta = { packageName, meta: { ...declaration, location } }
+    this.pkgMeta.set(sourceKey, entry)
+    return entry
   }
 
   /**
-   * Locate the manifest of the package the Loader mounts for a row. The row's
-   * module location is authoritative: the specifier resolves through the same
-   * Loader resolution that imported the row's host half — including any
-   * active ESM hooks — and the nearest ancestor manifest declaring the name
-   * owns the module. Tree-anchored `require` resolution remains only for
-   * runtimes without Node internals.
-   * @param loaderName - module specifier of the loader row.
-   * @param baseUrl - resolution base of the tree that owns the row.
-   * @returns the manifest path, or `undefined` when the name resolves to no package root.
+   * The bundle bytes, baseline, and optional map for one resolved package.
+   * @param packageName - package that declares the client bundle.
+   * @param location - the source's locator for its bundle.
+   * @returns the immutable bytes plus the pre-read baseline.
+   * @throws {MissingClientBundleError} when the source has no bytes for the locator.
    */
-  private locatePkgJson(loaderName: string, baseUrl: string): { path: string; packageName: string } | undefined {
-    if (loaderName.startsWith('cordis:')) return undefined
-    const pathLike = loaderName.startsWith('.') || loaderName.startsWith('file:') || isAbsolute(loaderName)
-    const expectedPackageName = pathLike ? undefined : exactPackageSpecifier(loaderName)
-    if (!pathLike && expectedPackageName === undefined) return undefined
-    const internal = this.ctx.loader.internal
-    if (internal === undefined || typeof Reflect.get(internal, 'resolveSync') !== 'function') {
-      if (expectedPackageName === undefined) {
-        const moduleUrl = loaderName.startsWith('file:')
-          ? loaderName
-          : isAbsolute(loaderName) ? pathToFileURL(loaderName).href : new URL(loaderName, baseUrl).href
-        return this.nearestPackage(moduleUrl)
-      }
-      try {
-        return {
-          path: createRequire(baseUrl).resolve(`${expectedPackageName}/package.json`),
-          packageName: expectedPackageName,
-        }
-      } catch {
-        // Without Node internals the owning tree is the only resolver; an
-        // unresolvable name is classified exactly as below.
-        return undefined
-      }
-    }
-    let moduleUrl: string
-    try {
-      moduleUrl = internal.version === 'v2'
-        ? internal.resolveSync(baseUrl, { specifier: loaderName, attributes: {} }).url
-        : internal.resolveSync(loaderName, baseUrl, {}).url
-    } catch {
-      // The Loader cannot resolve the name: its row cannot have imported, so
-      // the name is permanently not a client row.
-      return undefined
-    }
-    return this.nearestPackage(moduleUrl, expectedPackageName)
+  private bundleSnapshot(packageName: string, location: string): {
+    bundle: Buffer
+    baseline: ClientArtifactBaseline
+    sourceMap?: ClientSourceMapSnapshot
+  } {
+    const { bundle, baseline } = this.ctx.clientBundleSource.snapshot(packageName, location)
+    const sourceMap = this.sourceMapSnapshot(location)
+    return { bundle, baseline, ...(sourceMap === undefined ? {} : { sourceMap }) }
   }
 
-  private nearestPackage(
-    moduleUrl: string,
-    expectedPackageName?: string,
-  ): { path: string; packageName: string } | undefined {
-    if (!moduleUrl.startsWith('file:')) return undefined
-    let dir = dirname(fileURLToPath(moduleUrl))
-    while (true) {
-      const candidate = join(dir, 'package.json')
-      if (existsSync(candidate)) {
-        try {
-          const name = (JSON.parse(readFileSync(candidate, 'utf8')) as { name?: unknown }).name
-          if (typeof name === 'string' && (expectedPackageName === undefined || name === expectedPackageName)) {
-            return { path: candidate, packageName: name }
-          }
-        } catch {
-          // An unreadable or malformed intermediate manifest cannot own the
-          // module; keep walking toward the declaring package root.
-        }
-      }
-      const parent = dirname(dir)
-      if (parent === dir) break
-      dir = parent
+  /** Treat a torn or malformed development map as an identity-mapped artifact revision. */
+  private sourceMapSnapshot(location: string): ClientSourceMapSnapshot | undefined {
+    try {
+      return this.ctx.clientBundleSource.readSourceMap(location)
+    } catch (error) {
+      this.ctx.logger.warn(error)
+      return undefined
     }
-    return undefined
+  }
+
+  /**
+   * Subscribe to bundle rebuilds; fires only when the re-hash changed the rev.
+   * @param listener - receives the entry id and its new bundle rev.
+   * @returns the unsubscriber.
+   */
+  onRebuilt(listener: (id: string, rev: string) => void): () => void {
+    this.rebuildListeners.add(listener)
+    return () => { this.rebuildListeners.delete(listener) }
   }
 
   private sourceKey(loaderName: string, baseUrl: string): string {
     return `${baseUrl}\0${loaderName}`
   }
 
-  /** Capture the bundle stats before reading its bytes. */
-  private captureArtifactBaseline(clientPath: string): ClientArtifactBaseline {
-    const bundle = statSync(clientPath)
-    return {
-      path: clientPath,
-      mtimeMs: bundle.mtimeMs,
-      size: bundle.size,
-    }
-  }
 
   /** Allocate an opaque initial row revision without inspecting artifact bytes. */
   private allocateInitialRevision(): string {
     return `${this.initialRevisionNonce}-${String(this.nextInitialRevision++)}`
   }
 
-  /**
-   * Read the activation-time bundle and optional source-map snapshots.
-   * @param pkgName - package that declares the client bundle.
-   * @param clientPath - absolute path of the built client artifact.
-   * @returns the immutable bytes plus the pre-read filesystem baseline.
-   * @throws {MissingClientBundleError} when the read fails with `ENOENT`; other filesystem errors are rethrown unchanged.
-   */
-  private initialBundleSnapshot(pkgName: string, clientPath: string): {
-    bundle: Buffer
-    baseline: ClientArtifactBaseline
-    sourceMap?: WebPluginRecord['sourceMap']
-  } {
-    try {
-      const baseline = this.captureArtifactBaseline(clientPath)
-      const bundle = readFileSync(clientPath)
-      const sourceMap = this.readSourceMapSnapshot(clientPath)
-      return { bundle, baseline, ...(sourceMap === undefined ? {} : { sourceMap }) }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-      throw new MissingClientBundleError(pkgName, clientPath, error)
-    }
-  }
-
-  /** Treat a missing, torn, or malformed development map as an identity-mapped artifact revision. */
-  private readSourceMapSnapshot(clientPath: string): WebPluginRecord['sourceMap'] {
-    try {
-      return sourceMapSnapshot(clientPath)
-    } catch (error) {
-      this.ctx.logger.warn(error)
-      return undefined
-    }
-  }
 
   /** Reconcile one entry name against the live Loader sources. @returns whether the table changed. */
   private processOne(entryName: string, onError: (err: Error) => void): boolean {
@@ -957,7 +740,7 @@ export class ClientModuleRegistry extends Service {
     if (this.table.get(packageName)?.sourceKey === source.sourceKey) return false
     // The opaque initial rev rides the row until HMR observes a file change;
     // a fiber restart from the same source reuses the existing row.
-    const snapshot = this.initialBundleSnapshot(packageName, source.meta.clientPath)
+    const snapshot = this.bundleSnapshot(packageName, source.meta.location)
     const rev = this.allocateInitialRevision()
     this.table.set(packageName, {
       entry: graphRow(packageName, rev, source.meta),
@@ -999,28 +782,25 @@ export class ClientModuleRegistry extends Service {
     this.notifyGraphChanged()
   }
 
-  private readonly serveBundle = (req: IncomingMessage, res: ServerResponse): void => {
-    if (req.method !== 'GET' && req.method !== 'HEAD') {
-      res.writeHead(405)
-      res.end()
-      return
+  private readonly serveBundle = (request: Request): Response => {
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      return new Response(null, { status: 405 })
     }
-    /* v8 ignore next -- `?? '/'` arm: node:http always sets url on server requests. */
-    const requestUrl = new URL(req.url ?? '/', 'http://x')
+    const requestUrl = new URL(request.url)
     const resourceUrl = `${requestUrl.pathname}${requestUrl.search}`
     const response = this.responses.get(resourceUrl) ?? this.previousBatchResponses.get(resourceUrl)
     if (response !== undefined) {
-      res.writeHead(200, {
-        'content-type': response.contentType,
-        'cache-control': IMMUTABLE_CACHE,
+      return new Response(request.method === 'HEAD' ? null : new Uint8Array(response.body), {
+        status: 200,
+        headers: {
+          'content-type': response.contentType,
+          'cache-control': IMMUTABLE_CACHE,
+        },
       })
-      res.end(req.method === 'HEAD' ? undefined : response.body)
-      return
     }
     // Anything else under /plugins (including unadvertised combinations and
     // /plugins/events when the HMR row is absent) is an unknown resource.
-    res.writeHead(404)
-    res.end()
+    return new Response(null, { status: 404 })
   }
 }
 

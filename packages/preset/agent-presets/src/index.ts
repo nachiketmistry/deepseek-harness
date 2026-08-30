@@ -21,7 +21,6 @@
  * @module @deepseek-ai/dsh-agent-presets
  */
 
-import { stat } from 'node:fs/promises'
 import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { Remote, TypertRemoteFailure, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
@@ -34,16 +33,11 @@ import type {} from '@deepseek-ai/dsh-session-projection'
 // Type-only: resolves the registry notification emitted after scope reparenting.
 import type {} from '@deepseek-ai/dsh-tools'
 import { settingsNamespace, type SettingsScope, type default as SettingsService } from '@deepseek-ai/dsh-settings'
-import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
-import { discoverPresets, SHIPPED_PRESET_ROOT, USER_PRESET_DIR } from './discovery.ts'
-import {
-  copyComposition, deleteComposition, readComposition,
-  InvalidPresetIdError, PresetExistsError, PresetNotWritableError,
-} from './authoring.ts'
 import { mountPreset, serviceForAgent, standingMountFor } from './mount.ts'
 import {
-  PresetLockedError, PresetMountError, UnknownPresetError,
-  type AgentPreset, type Config, type PresetRoot,
+  InvalidPresetIdError, PresetExistsError, PresetLockedError, PresetMountError,
+  PresetNotWritableError, UnknownPresetError,
+  type AgentPreset, type Config,
 } from './preset.ts'
 import { agentPresetProjectionDefinition } from './session.ts'
 export type * from './types.ts'
@@ -123,21 +117,20 @@ export const AgentPresetSettingsSchema: z<AgentPresetSettings> = z.object({
   default: z.string(),
 })
 
-export { COMPOSITION_FILE, discoverPresets, scanRoot, SHIPPED_PRESET_ROOT } from './discovery.ts'
-export {
-  METADATA_FILE, readPresetMetadata, renderPresetMetadata, type PresetMetadata,
-} from './metadata.ts'
 export {
   inactiveRows, leakedServices, livePresetMounts, mountPreset, serviceForAgent, standingMountFor,
   type JoinedPresetMount, type PresetMount,
 } from './mount.ts'
-export {
-  copyComposition, deleteComposition, InvalidPresetIdError, PresetExistsError,
-  PresetNotWritableError, readComposition, writableRoot,
-} from './authoring.ts'
+export { AgentPresetSource, type PresetComposition } from './source.ts'
+export { InvalidPresetIdError, PresetExistsError, PresetNotWritableError } from './preset.ts'
 export { agentPresetProjectionDefinition } from './session.ts'
 export { PresetLockedError, PresetMountError, UnknownPresetError } from './preset.ts'
 export type { AgentPreset, Config, PresetRoot, PresetTrust } from './preset.ts'
+export { PRESET_ID } from './preset.ts'
+// Shared with the composed source: health resolves every row from the same
+// base the mount imports it from, so both sides must classify alike.
+export { classifyRowSpecifier, type RowSpecifier } from './specifier.ts'
+import type { AgentPresetSource } from './source.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -153,44 +146,12 @@ declare module '@deepseek-ai/cordis' {
  * and a preset deleted underneath a picker disappears from the next read.
  */
 export class AgentPresets extends TypertRemoteService {
-  static inject = ['loader']
+  static inject = ['loader', 'agentPresetSource']
 
   /** Runtime schema for the preset roster. */
   static Config = z.object({
     default: z.string().required(),
-    roots: z.array(z.object({
-      path: z.string().required(),
-      trust: z.union(['system', 'user'] as const).default('user'),
-    })).default([]),
-    includeShippedRoot: z.boolean().default(true),
-    includeUserRoot: z.boolean().default(true),
   }) as z<Config>
-
-  /**
-   * The roots discovery and authoring actually scan: the package's shipped
-   * root unless `includeShippedRoot` is false, then every configured root in
-   * order, then the harness-home user root unless `includeUserRoot` is false.
-   *
-   * Derived once, because a root set that changed between `list()` and the
-   * `copy()` acting on its answer would author into a directory the caller
-   * never saw. The shipped root comes FIRST and the user root LAST because an
-   * earlier root wins a duplicate id: a shipped preset shadows any directory
-   * that claimed its name, and a configured root still shadows a locally
-   * authored one.
-   */
-  private readonly resolvedRoots: readonly PresetRoot[]
-
-  /**
-   * Where a row's package name resolves from: the base URL of the composition
-   * this roster was loaded by, which is inside the installed harness.
-   *
-   * Discovery needs it because a preset's own directory is the wrong base for
-   * a package name — a locally authored preset lives under the user's home,
-   * where Node's upward `node_modules` walk never reaches the harness's
-   * dependencies. The mount already resolves rows this way; holding the same
-   * base here is what lets health answer the question before a session does.
-   */
-  private readonly harnessBase: string
 
   /**
    * The user layer over `config.default`, present only while a settings
@@ -218,23 +179,15 @@ export class AgentPresets extends TypertRemoteService {
   constructor(ctx: Context, public config: Config) {
     super(ctx, 'agentPresets')
     this.selfCtx = ctx
-    const { baseUrl } = ctx
-    if (baseUrl === undefined) {
-      // Self-contained misconfiguration, so it fails at load: without a base
-      // the roster can neither resolve a row nor tell a healthy preset from
-      // one naming a package that is gone, and the silent alternative is the
-      // exact failure this check exists to report.
+    if (ctx.baseUrl === undefined) {
+      // Self-contained misconfiguration, so it fails at load: a mounted preset
+      // resolves each row's package name from this base, and the silent
+      // alternative is every row failing to import at the first session.
       throw new Error(
         'agent-presets: the roster needs `ctx.baseUrl` to resolve the plugins a composition names; '
         + 'compose it under a Loader, or set the base on the context this plugin is applied to',
       )
     }
-    this.harnessBase = baseUrl
-    this.resolvedRoots = [
-      ...config.includeShippedRoot ? [{ path: SHIPPED_PRESET_ROOT, trust: 'system' } satisfies PresetRoot] : [],
-      ...config.roots,
-      ...config.includeUserRoot ? [{ path: dshHomePath(USER_PRESET_DIR), trust: 'user' } satisfies PresetRoot] : [],
-    ]
     // Deliberately not `installSettingsSection`: that helper exists to re-judge
     // what a consumer DERIVED from the source — memoized resolutions,
     // registration-level facts — across attach, detach, and change. Nothing
@@ -269,8 +222,10 @@ export class AgentPresets extends TypertRemoteService {
     // `recompose` is warned about once, before its first bind. Shipped Web
     // sessions mount in `setup`, and children join through `composeFrom`
     // before publication.
+    // Unconditional: a source is a required injection, so a composition that
+    // mounts this roster always has one, and a rosterless deployment is one
+    // that does not mount this plugin at all.
     ctx.on('agent/created', ({ agent }) => {
-      if (this.resolvedRoots.length === 0) return
       if (this.composedPreset(agent.ctx) !== undefined) return
       ctx.logger.warn(
         `agent "${agent.id}" was published without joining an agent preset; `
@@ -299,11 +254,11 @@ export class AgentPresets extends TypertRemoteService {
   }
 
   /**
-   * Every preset the configured roots currently supply.
-   * @returns the presets, first-root-wins per id.
+   * Every preset the source currently supplies, broken ones included.
+   * @returns the presets in the source's display order.
    */
   async list(): Promise<AgentPreset[]> {
-    return await discoverPresets(this.resolvedRoots, this.harnessBase)
+    return await this.source.list()
   }
 
   /**
@@ -467,20 +422,14 @@ export class AgentPresets extends TypertRemoteService {
     return standingMountFor(agentCtx)?.presetId
   }
 
-  /**
-   * The roots this roster scans, which is not `config.roots`: the package's
-   * shipped root unless `includeShippedRoot` is false, every configured root
-   * in order, then the harness-home user root unless `includeUserRoot` is
-   * false. Read this — not the config field — to answer whether a roster is
-   * composed at all, so one derivation decides it.
-   */
-  get roots(): readonly PresetRoot[] {
-    return this.resolvedRoots
+    /** The composed source, read through the untraced context. */
+  private get source(): AgentPresetSource {
+    return this.selfCtx.agentPresetSource
   }
 
-  /** Whether this deployment has a root locally authored presets go to. */
+  /** Whether this deployment has a location locally authored presets go to. */
   get authorable(): boolean {
-    return this.resolvedRoots.some(root => root.trust === 'user')
+    return this.source.authorable
   }
 
   /**
@@ -490,7 +439,7 @@ export class AgentPresets extends TypertRemoteService {
    * @throws when no configured root supplies that id.
    */
   async read(id: string): Promise<string> {
-    return await readComposition(await this.resolve(id))
+    return await this.source.read(await this.resolve(id))
   }
 
   /**
@@ -536,11 +485,11 @@ export class AgentPresets extends TypertRemoteService {
     const source = await this.resolve(from)
     // The roster check refuses ids any root supplies — shipped ones included,
     // since a user directory named like a shipped preset is shadowed by it.
-    // The disk check inside copyComposition only sees the writable root.
+    // The source's own check only sees the location it would write to.
     if ((await this.list()).some(preset => preset.id === id)) {
       throw new PresetExistsError(id)
     }
-    await copyComposition(this.resolvedRoots, source, id, name)
+    await this.source.copy(source, id, name)
     // A settled mount under this id can only be stale (its preset was deleted
     // from disk outside `remove`); the new preset must not inherit it. Every
     // session already joined keeps the generation it runs on regardless.
@@ -574,7 +523,7 @@ export class AgentPresets extends TypertRemoteService {
    * @throws when the preset is unknown or ships with the deployment.
    */
   async remove(id: string): Promise<void> {
-    await deleteComposition(this.resolvedRoots, await this.resolve(id))
+    await this.source.remove(await this.resolve(id))
     // Sessions on the deleted preset keep their standing mount; only new
     // sessions see the roster without it.
     this.standing.delete(id)
@@ -747,13 +696,13 @@ export class AgentPresets extends TypertRemoteService {
     const pending = this.standing.get(preset.id)
     if (pending !== undefined) {
       const mounted = await pending
-      // Files are the only composition editor (authoring is copy/delete), so
-      // the stamp is what notices an edit: a changed file starts the next
-      // generation here, for this and later sessions. An unreadable stamp
-      // serves the current generation — a mount must survive its file
-      // disappearing, and failing the session over a stat would not.
-      const current = await compositionStamp(preset.path)
-      if (current === undefined || sameStamp(mounted.stamp, current)) return mounted
+      // Authoring is copy/delete, so an in-place edit is the source's to
+      // notice: a changed stamp starts the next generation here, for this and
+      // later sessions. An absent stamp serves the current generation — a
+      // mount must survive its composition disappearing, and failing the
+      // session over an unreadable identity would not.
+      const current = await this.source.stamp(preset)
+      if (current === undefined || mounted.stamp === current) return mounted
       // TODO: reclaim the superseded generation once the last agent joined to
       // it is gone. The subtree is not inert — `dsh-skill-filesystem` watches its
       // roots — and the settings-page authoring flow turns "a composition
@@ -769,15 +718,13 @@ export class AgentPresets extends TypertRemoteService {
       const key: ScopeKey = { agentPreset: preset.id }
       const scope = createScope(this.selfCtx, key)
       try {
-        // Stamped before the file is read: an edit racing the mount makes the
-        // stamp stale rather than silently current, so the next session
-        // refreshes instead of trusting a composition older than its stamp.
-        const stamp = await compositionStamp(preset.path)
-        if (stamp === undefined) {
-          throw new PresetMountError(preset.id, `composition file is unreadable: ${preset.path}`)
-        }
-        await mountPreset(scope.ctx, preset)
-        return { key, scope, stamp }
+        // The composition is read through the source, which reports the stamp
+        // its rows were read under: an edit racing the mount makes that stamp
+        // stale rather than silently current, so the next session refreshes
+        // instead of trusting a composition older than its stamp.
+        const composition = await this.source.composition(preset)
+        await mountPreset(scope.ctx, preset, composition)
+        return { key, scope, stamp: composition.stamp }
       } catch (error) {
         this.standing.delete(preset.id)
         await scope.dispose()
@@ -789,30 +736,6 @@ export class AgentPresets extends TypertRemoteService {
   }
 }
 
-/** The composition file identity one standing generation was mounted from. */
-interface CompositionStamp {
-  /** Modification time in milliseconds, as `stat` reports it. */
-  readonly mtimeMs: number
-  /** File size in bytes, the tiebreak for edits within one mtime tick. */
-  readonly size: number
-}
-
-/** Read one composition file's stamp, or undefined when it cannot be statted. */
-async function compositionStamp(path: string): Promise<CompositionStamp | undefined> {
-  try {
-    const { mtimeMs, size } = await stat(path)
-    return { mtimeMs, size }
-  } catch {
-    // Deleted, replaced by an unreadable entry, or otherwise unstattable all
-    // mean the same to the caller: the file offers no identity to compare.
-    return undefined
-  }
-}
-
-/** Whether two stamps name the same file state. */
-function sameStamp(a: CompositionStamp, b: CompositionStamp): boolean {
-  return a.mtimeMs === b.mtimeMs && a.size === b.size
-}
 
 /** One preset's standing composition. */
 interface StandingMount {
@@ -821,7 +744,7 @@ interface StandingMount {
   /** Disposal boundary; held for whole-tree teardown, never per-session. */
   readonly scope: Scope
   /** Stamp of the composition file this generation was mounted from. */
-  readonly stamp: CompositionStamp
+  readonly stamp: string
 }
 
 export default AgentPresets

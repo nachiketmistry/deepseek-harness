@@ -16,6 +16,7 @@ import {
   MAX_WRITE_BATCH_DELAY_MS,
   PersistenceCoordinator,
   SessionPersistence,
+  type BorrowedSessionSource,
   type SessionInspection,
   type SessionLocation,
   type SessionPersistenceSnapshot,
@@ -81,6 +82,10 @@ export class DoSessionPersistence extends SessionPersistence {
 
   load(id: SessionId): Promise<SessionInspection> {
     return this.coordinator.load(id)
+  }
+
+  borrowSession(id: SessionId, signal?: AbortSignal): Promise<BorrowedSessionSource> {
+    return this.coordinator.borrowSession(id, signal)
   }
 
   inspect(id: SessionId, signal?: AbortSignal): Promise<SessionInspection> {

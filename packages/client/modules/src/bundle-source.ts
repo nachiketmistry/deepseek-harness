@@ -2,14 +2,14 @@
  * The client-bundle-source Service Definition: where the node half finds a
  * package's `dsh.client` declaration and its built browser bundle. The Node
  * provider (`@deepseek-ai/dsh-client-bundle-source-node`) resolves packages
- * through `node_modules`; a platform provider answers from a build-time
- * manifest and its asset store. The registry consumes only this contract, so
- * scanning, graph composition, and bundle serving never touch a filesystem.
+ * through the Loader and `node_modules`; a platform provider answers from a
+ * build-time manifest and its asset store. The registry consumes only this
+ * contract, so scanning, graph composition, and bundle serving never touch a
+ * filesystem.
  * @module @deepseek-ai/dsh-client-modules/bundle-source
  */
 
 import { Context, Service } from '@deepseek-ai/cordis'
-import { optionalStringArray } from './client/manifest.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -19,13 +19,53 @@ declare module '@deepseek-ai/cordis' {
 }
 
 /** The declared fields a graph row carries, normalized (absent array declarations become empty). */
-export interface ClientBundleDescription {
+export interface ClientBundleDeclaration {
   /** Client plugin names injected before this one (`dsh.client.inject`). */
   inject?: string[]
   /** Module specifiers the package requests from the module table (`dsh.client.external`). */
   external: string[]
-  /** Boot phase-one prefetch mark (`dsh.client.immediately`). */
+  /** Boot phase-one registration barrier (`dsh.client.immediately`). */
   immediately: boolean
+}
+
+/** One resolved browser package: its identity, its declaration, and where its bundle lives. */
+export interface ResolvedClientBundle {
+  /** Manifest name of the package that owns the browser module. */
+  packageName: string
+  /** The package's normalized `dsh.client` declaration. */
+  declaration: ClientBundleDeclaration
+  /**
+   * Source-owned locator for this package's bundle, passed back to
+   * {@link ClientBundleSource.snapshot} and friends. The registry never
+   * interprets it; the Node provider uses the bundle's absolute path.
+   */
+  location: string
+}
+
+/** Filesystem baseline captured before a client artifact snapshot is read. */
+export interface ClientArtifactBaseline {
+  /** Absolute path of the client bundle, or the source's locator when it has no file. */
+  readonly path: string
+  /** Bundle modification time in milliseconds; zero when the source has no mutable artifact. */
+  readonly mtimeMs: number
+  /** Bundle size in bytes. */
+  readonly size: number
+}
+
+/** One authored source map, retained as bytes plus its parsed object. */
+export interface ClientSourceMapSnapshot {
+  /** The map bytes exactly as stored. */
+  body: Buffer
+  /** The parsed Source Map v3 object. */
+  parsed: Record<string, unknown>
+}
+
+/** One bundle read, with the baseline captured before its bytes. */
+export interface ClientBundleSnapshot {
+  /** The built bundle. */
+  bundle: Buffer
+  /** The baseline captured before the bytes were read. */
+  baseline: ClientArtifactBaseline
 }
 
 /** Recovery instruction shared by grouped startup and steady-state bundle diagnostics. */
@@ -55,9 +95,11 @@ export class MissingClientBundleError extends Error {
 }
 
 /**
- * Declarations and bytes of web client bundles, by package name. Verdicts are
- * permanent for a process: a package that is not a web client package stays
- * one, so the registry caches `describe` results and re-reads only bytes.
+ * Declarations and bytes of web client bundles.
+ *
+ * Verdicts are permanent for a process: a Loader row that is not a web client
+ * package stays one, so the registry caches `resolve` results per row and
+ * re-reads only bytes.
  */
 export abstract class ClientBundleSource extends Service {
   constructor(ctx: Context) {
@@ -65,70 +107,38 @@ export abstract class ClientBundleSource extends Service {
   }
 
   /**
-   * The package's web client declaration.
-   * @param packageName - a Loader entry name.
-   * @returns the normalized declaration, or undefined when the name is not a
-   * resolvable package or declares no web client bundle.
-   * @throws when the declaration is malformed or names no bundle.
+   * The browser package one Loader row contributes, if any.
+   * @param loaderName - module specifier of the loader row.
+   * @param baseUrl - resolution base of the tree that owns the row.
+   * @returns the resolved package, or `undefined` when the row resolves to no
+   * package root or declares no web client bundle.
+   * @throws when the declaration is malformed or names no `./client` export.
    */
-  abstract describe(packageName: string): ClientBundleDescription | undefined
+  abstract resolve(loaderName: string, baseUrl: string): ResolvedClientBundle | undefined
 
   /**
-   * The bundle's current bytes. Synchronous because the activation scan that
-   * hashes every bundle runs inside plugin construction.
-   * @param packageName - a package `describe` accepted.
-   * @returns the built bundle.
+   * The bundle's current bytes and the baseline captured before reading them.
+   * Synchronous because the activation scan that hashes every bundle runs
+   * inside plugin construction.
+   * @param packageName - the owning package, for the absent-bundle diagnostic.
+   * @param location - a locator {@link resolve} returned.
+   * @returns the bundle and its baseline.
    * @throws {MissingClientBundleError} when the bundle is absent.
    */
-  abstract read(packageName: string): Uint8Array
+  abstract snapshot(packageName: string, location: string): ClientBundleSnapshot
 
   /**
-   * The bundle's source map bytes.
-   * @param packageName - a package `describe` accepted.
-   * @returns the map, or undefined when the source has none.
+   * The bundle's authored source map.
+   * @param location - a locator {@link resolve} returned.
+   * @returns the map, or `undefined` when the source has none.
+   * @throws when a present map is not a regular Source Map v3 object.
    */
-  abstract readSourceMap(packageName: string): Promise<Uint8Array | undefined>
+  abstract readSourceMap(location: string): ClientSourceMapSnapshot | undefined
 
   /**
-   * A file-backed source's bundle path, for a watcher that polls it.
-   * @param packageName - a package `describe` accepted.
-   * @returns the absolute path, or undefined when the source has no file behind the bundle.
+   * The path a rebuild watcher polls for this bundle.
+   * @param location - a locator {@link resolve} returned.
+   * @returns the absolute path, or `undefined` when no file backs the bundle.
    */
-  abstract locate(packageName: string): string | undefined
-}
-
-/** Narrow an unknown parsed JSON value to the `dsh.client` declaration, throwing on malformed fields. */
-export function parseClientDeclaration(pkgName: string, value: unknown): ClientBundleDescription & { platform: string } | undefined {
-  if (value === undefined) return undefined
-  if (typeof value !== 'object' || value === null) {
-    throw new Error(`client-modules: ${pkgName} has a non-object dsh.client declaration`)
-  }
-  const decl = value as Record<string, unknown>
-  if (typeof decl.platform !== 'string') {
-    throw new Error(`client-modules: ${pkgName} dsh.client.platform must be a string`)
-  }
-  const inject = optionalStringArray(pkgName, 'dsh.client.inject', decl.inject)
-  const external = optionalStringArray(pkgName, 'dsh.client.external', decl.external)
-  if (decl.immediately !== undefined && typeof decl.immediately !== 'boolean') {
-    throw new Error(`client-modules: ${pkgName} dsh.client.immediately must be a boolean`)
-  }
-  return {
-    platform: decl.platform,
-    ...(inject !== undefined ? { inject } : {}),
-    external: external ?? [],
-    immediately: decl.immediately === true,
-  }
-}
-
-/** Resolve `exports["./client"]` to a relative path, accepting the string and one-level conditional forms. */
-export function clientExportOf(pkgName: string, exportsField: unknown): string | undefined {
-  if (typeof exportsField !== 'object' || exportsField === null) return undefined
-  const client = (exportsField as Record<string, unknown>)['./client']
-  if (client === undefined) return undefined
-  if (typeof client === 'string') return client
-  if (typeof client === 'object' && client !== null) {
-    const fallback = (client as Record<string, unknown>).default
-    if (typeof fallback === 'string') return fallback
-  }
-  throw new Error(`client-modules: ${pkgName} exports["./client"] must be a string or an object with a string default`)
+  abstract watchPath(location: string): string | undefined
 }

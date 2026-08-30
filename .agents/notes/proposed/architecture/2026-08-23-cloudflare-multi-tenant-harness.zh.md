@@ -8,7 +8,7 @@ Status: proposed
 
 [Cloudflare web host](2026-08-21-cloudflare-web-host.zh.md) 把产品搬上了 Workers，并把认证与多租户明确排除在范围之外，而部署也字面地体现了这一点：一个名为 `default` 的 Host Durable Object、一个名为 `default` 的 Sandbox 容器、以部署级 Worker secret 形式存在的 Provider 凭据，以及 harness 中根本不存在的 principal。`SessionHeader` 记录 `id`、`createdAt`、`cwd` 与血缘，却没有 owner。唯一被称作 user id 的值是 `dsh-anonymous-user-id`，一个以 `$DSH_HOME` 为作用域、且刻意不从任何可识别来源派生的遥测 UUID。
 
-同样不存在的是认证。`dsh-client-connection` 把 `trustedHosts` 记录为 DNS 重绑定围栏，"明确不是认证"，并在真正的认证层出现之前，把特权配置平面钉死在 loopback 上。CF 组合用公开主机覆盖了 `privilegedHosts`，于是设置变更、凭据侦察、preset 管理，以及会让 Worker 向调用者选定的 URL 发起 GET 并回报结果的 `llm.discoverModels`，任何知道主机名的人都能触达。
+认证在本笔记写下的第二天到来：每一个 Host RPC 方法、Remote 调用和 WebSocket 流，现在都要求一个由整部署共用的启动令牌兑换而来的已签名浏览器会话。`privilegedHosts` 在同一时期成为死键，`packages/` 中已无任何代码读它。[principal seam 笔记](2026-08-29-principal-seam-and-per-principal-addressing.zh.md)在认证、认证服务的运行时宿主、其插件集以及 `privilegedHosts` 的处置这四点上取代本笔记；以下其余部分依然成立。
 
 还有两个事实决定了形态，而不只是约束它。Cloudflare 上的容器磁盘是易失的：休眠后的实例会以镜像为准带着全新磁盘重启，而平台还会在不规律的时间点因宿主机重启而停止实例。因此当前这个单一 sandbox 在每次空闲之后就已经丢失了 git 检出 —— 也就是说，部署早已在遵循易失工作区模式，只是从未选择过它。此外，产品打算出售模型容量而非接受客户自带的 Provider key，这从设计中移除了按租户存放凭据的需求，取而代之的是计量与配额义务。
 
@@ -16,7 +16,7 @@ Status: proposed
 
 ### 身份与租户
 
-身份被委托给自托管的 Better Auth 服务，绝不在 harness 内建模。Neon 上的 Managed Better Auth 只开放了一个插件子集，其中不含 Teams 与企业 SSO，而这两者本产品都需要，因此该服务作为我们自己的部署运行在 Neon Postgres 之上，并启用 organization、teams 与 SSO 插件。
+身份被委托给自托管的 Better Auth 服务，绝不在 harness 内建模。Neon 上的 Managed Better Auth 只开放了一个插件子集，其中不含 Teams 与企业 SSO，而这两者本产品都需要，因此该服务作为我们自己的部署运行在 Neon Postgres 之上。[principal seam 笔记](2026-08-29-principal-seam-and-per-principal-addressing.zh.md)把第一版插件集收缩为 organization 与 jwt，推迟 teams 与 SSO。
 
 租户层级是 organization、team、user、session。**organization 是隔离边界，user 是协调原子，而 team 是一种授予** —— 一种让若干人访问同一批项目与 preset 的方式，绝不是一个独立的数据世界。因此 team 成员关系只影响授权，绝不出现在存储键中：换了 team 的用户不能因此丢掉自己的会话。
 
@@ -28,11 +28,11 @@ Better Auth 在 session 上记录一个活跃 organization，而一个用户可�
 
 校验发生在 Worker 的 `fetch` handler 中，针对按 isolate 缓存、刷新下限为五到十分钟的 JWKS。Durable Object 从不认证：它收到的是已经校验过的 principal，并据此推导自身身份，这正是让隔离成为结构性而非劝告性的原因。这也让认证服务不在请求热路径上 —— 休眠的认证容器只会让登录变慢，绝不会让产品变慢。
 
-`dsh-client-connection` 今天按主机来把守特权配置平面。该关卡改为按 principal 与角色把守，CF 组合也不再覆盖 `privilegedHosts`。
+特权配置平面不再按主机把守：`privilegedHosts` 是一个死键，[principal seam 笔记](2026-08-29-principal-seam-and-per-principal-addressing.zh.md)将其删除而非改按新维度把守，并推迟角色。
 
 ### 拓扑
 
-一个 Durable Object 类承载 harness 树，以 `org:user` 寻址。这遵循 Cloudflare 自己的规则 —— 围绕协调原子来建模 Durable Object，并把全局单例点名为反模式。organization 级的 Durable Object 被否决：它会把每位成员的会话都压在同一把单线程锁后面。
+一个 Durable Object 类承载 harness 树，以 principal 寻址（名字方案见 [principal seam 笔记](2026-08-29-principal-seam-and-per-principal-addressing.zh.md)）。这遵循 Cloudflare 自己的规则 —— 围绕协调原子来建模 Durable Object，并把全局单例点名为反模式。organization 级的 Durable Object 被否决：它会把每位成员的会话都压在同一把单线程锁后面。
 
 不存在第二个 Durable Object 类。organization 共享的 harness 状态 —— team 作用域的 preset 库、项目清单 —— 与治理它的 organization 数据一同放在 Postgres，因为它以读为主，不需要单写者。
 
@@ -74,7 +74,7 @@ AI Gateway 是强制点，不是记录系统。它的成本追踪是尽力而为
 
 ### 认证服务
 
-Better Auth 运行在一个 Cloudflare Container 中，位于它自己的 Worker 之后，与 `dsh-cf-web` 分离，因此认证部署与 harness 部署互不影响，harness 打包也只需携带 `jose`。容器是必需而非偏好：SSO 插件的 SAML 一半依赖 samlify，它不太可能在 workerd 上运行；容器同时提供走 TCP 的原生 Postgres，请求路径上无需 Hyperdrive。
+Better Auth 与 `dsh-cf-web` 分离运行，因此认证部署与 harness 部署互不影响，harness 打包也只需携带 `jose`。一旦 SSO 插件的 SAML 一半进入范围，容器就是必需的，因为 samlify 不太可能在 workerd 上运行；容器同时提供走 TCP 的原生 Postgres，请求路径上无需 Hyperdrive。[principal seam 笔记](2026-08-29-principal-seam-and-per-principal-addressing.zh.md)转而把第一版放在 `apps/cf-auth` 的一个 Worker 上，因为 organization 加 jwt 中没有任何部分需要 Node 运行时。
 
 该服务是无状态的。包括 JWKS 私钥在内的全部状态都在 Postgres，实例以 `getRandom` 在固定池中路由，镜像处理 `SIGTERM` —— 因为平台会在宿主机重启时停止实例，并给出十五分钟的排空窗口。区域放置固定在靠近 Neon 项目处，因为每个认证请求都是一次数据库往返。
 

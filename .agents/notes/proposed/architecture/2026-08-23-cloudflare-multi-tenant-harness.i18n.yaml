@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-08-23-cloudflare-multi-tenant-harness.md
-2026-08-23-cloudflare-multi-tenant-harness.md: 3bdd9d462b0f5ba7a200da44ef80ec0394fb0d67
-2026-08-23-cloudflare-multi-tenant-harness.zh.md: c7ee45a0a947d5efa2e4a1ebcc1d3ddd58a3240e
+2026-08-23-cloudflare-multi-tenant-harness.md: fd562d78a36220f0a78fe244d62b1616610e21cb
+2026-08-23-cloudflare-multi-tenant-harness.zh.md: e69c89b19da92ddde9bcd5b870e6107db2f29ba9

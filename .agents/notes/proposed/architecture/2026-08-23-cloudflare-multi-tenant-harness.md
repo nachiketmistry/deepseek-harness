@@ -8,7 +8,7 @@ English | [中文](2026-08-23-cloudflare-multi-tenant-harness.zh.md)
 
 [The Cloudflare web host](2026-08-21-cloudflare-web-host.md) put the product on Workers with authentication and multi-tenancy declared out of scope, and the deployment reflects that literally: one Host Durable Object named `default`, one Sandbox container named `default`, provider credentials as deployment-level Worker secrets, and no principal anywhere in the harness. `SessionHeader` records `id`, `createdAt`, `cwd`, and lineage, and no owner. The only value called a user id is `dsh-anonymous-user-id`, a telemetry UUID scoped to `$DSH_HOME` and deliberately derived from nothing identifying.
 
-There is also no authentication. `dsh-client-connection` documents `trustedHosts` as a DNS-rebinding fence, "explicitly not authentication", and keeps the privileged configuration plane pinned to loopback until a real authentication layer exists. The CF composition overrides `privilegedHosts` with the public host, so settings mutation, credential reconnaissance, preset management, and `llm.discoverModels` — which makes the Worker issue a GET to a caller-chosen URL and reports the result — are reachable by anyone who knows the hostname.
+Authentication arrived one day after this note was written: every Host RPC method, Remote call, and WebSocket stream now requires a signed browser session minted from a deployment-wide launch token. `privilegedHosts` became a dead key in the same period, read by nothing in `packages/`. [The principal seam note](2026-08-29-principal-seam-and-per-principal-addressing.md) supersedes this note on authentication, the auth service's runtime host, its plugin set, and the disposition of `privilegedHosts`; everything else below stands.
 
 Two further facts decide the shape rather than merely constrain it. Container disk on Cloudflare is ephemeral: an instance that sleeps restarts from its image with a fresh disk, and the platform stops instances on host restarts at an irregular cadence. The current single sandbox therefore already loses its git checkouts on every idle period, which means the deployment is following an ephemeral workspace pattern without having chosen one. And the product intends to sell model capacity rather than accept customer provider keys, which removes a per-tenant credential store from the design and replaces it with a metering and quota obligation.
 
@@ -16,7 +16,7 @@ Two further facts decide the shape rather than merely constrain it. Container di
 
 ### Identity and tenancy
 
-Identity is delegated to a self-hosted Better Auth service and never modelled in the harness. Managed Better Auth on Neon exposes a subset of plugins that excludes Teams and enterprise SSO, both of which this product needs, so the service runs as our own deployment against Neon Postgres with the organization, teams, and SSO plugins enabled.
+Identity is delegated to a self-hosted Better Auth service and never modelled in the harness. Managed Better Auth on Neon exposes a subset of plugins that excludes Teams and enterprise SSO, both of which this product needs, so the service runs as our own deployment against Neon Postgres. [The principal seam note](2026-08-29-principal-seam-and-per-principal-addressing.md) cuts the first plugin set to organization and jwt, deferring teams and SSO.
 
 The tenancy hierarchy is organization, team, user, session. **The organization is the isolation boundary, the user is the coordination atom, and a team is a grant** — a way to give several people access to the same projects and presets, never a separate data world. Team membership therefore affects authorization only; it never appears in a storage key, because a user who changes team must not lose their sessions.
 
@@ -28,11 +28,11 @@ Authentication becomes a capability seam in core, not a Cloudflare concern. The 
 
 Verification happens in the Worker's `fetch` handler, against JWKS cached per isolate with a refresh floor of five to ten minutes. The Durable Object never authenticates: it receives an already-verified principal and derives its own identity from it, which is what makes the isolation structural rather than advisory. This also keeps the auth service off the request path — a sleeping auth container costs a slow sign-in, never a slow product.
 
-`dsh-client-connection` gates the privileged configuration plane by host today. That gate is replaced by principal and role, and the CF composition stops overriding `privilegedHosts`.
+The privileged configuration plane is no longer gated by host: `privilegedHosts` is a dead key and [the principal seam note](2026-08-29-principal-seam-and-per-principal-addressing.md) deletes it rather than re-gating it, deferring roles.
 
 ### Topology
 
-One Durable Object class hosts the harness tree, addressed by `org:user`. This follows Cloudflare's own rule to model a Durable Object around the atom of coordination and names the global singleton as the anti-pattern. An organization-wide Durable Object is rejected: it puts every member's sessions behind one single-threaded lock.
+One Durable Object class hosts the harness tree, addressed by the principal (the name scheme is [the principal seam note](2026-08-29-principal-seam-and-per-principal-addressing.md)'s). This follows Cloudflare's own rule to model a Durable Object around the atom of coordination and names the global singleton as the anti-pattern. An organization-wide Durable Object is rejected: it puts every member's sessions behind one single-threaded lock.
 
 There is no second Durable Object class. Organization-shared harness state — the team-scoped preset library, the project roster — lives in Postgres beside the organization data that governs it, because it is read-mostly and needs no single writer.
 
@@ -74,7 +74,7 @@ Plan-tiered model access is enforced in the harness by not offering the model, a
 
 ### The authentication service
 
-Better Auth runs in a Cloudflare Container behind its own Worker, separate from `dsh-cf-web`, so an auth deploy and a harness deploy are independent and the harness bundle carries only `jose`. A container is required rather than preferred: the SSO plugin's SAML half depends on samlify, which is unlikely to run on workerd, and a container also gives plain Postgres over TCP with no Hyperdrive on the path.
+Better Auth runs separately from `dsh-cf-web`, so an auth deploy and a harness deploy are independent and the harness bundle carries only `jose`. A container is required once the SSO plugin's SAML half is in scope, because samlify is unlikely to run on workerd, and a container also gives plain Postgres over TCP with no Hyperdrive on the path. [The principal seam note](2026-08-29-principal-seam-and-per-principal-addressing.md) places the first cut on a Worker at `apps/cf-auth` instead, because nothing in organization plus jwt needs a Node runtime.
 
 The service is stateless. All state including JWKS private keys is in Postgres, instances are routed with `getRandom` across a fixed pool, and the image handles `SIGTERM`, because the platform stops instances on host restarts with a fifteen-minute drain. Region placement is pinned near the Neon project, since every auth request is a database round trip.
 

@@ -56,7 +56,7 @@ async function roster(config: Partial<SourceConfig> = {}): Promise<Context> {
 
 describe('the shipped preset root', () => {
   it('supplies the built-in presets from a bare roster, healthy and system-trusted', async () => {
-    const ctx = await roster({ includeShippedRoot: false, includeUserRoot: false })
+    const ctx = await roster({ includeUserRoot: false })
 
     const listed = await ctx.agentPresets.list()
     expect(listed.map(preset => preset.id).sort()).toEqual(['cordis', 'minimal', 'ptc', 'standard'])

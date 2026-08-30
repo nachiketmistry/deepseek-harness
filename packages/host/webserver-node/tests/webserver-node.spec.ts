@@ -520,7 +520,7 @@ describe('Fetch bridge helpers', () => {
     expect(finished.signal.aborted).toBe(false)
   })
 
-  it('toFetchRequest surfaces body stream failures and cancels by destroying the request', async () => {
+  it('toFetchRequest surfaces body stream failures and cancels by draining the request', async () => {
     const failing = Object.assign(new Readable({ read() {} }), {
       url: '/x', method: 'POST', headers: {},
     }) as unknown as IncomingMessage
@@ -530,13 +530,19 @@ describe('Fetch bridge helpers', () => {
     failing.destroy(new Error('body failure'))
     await expect(reading).rejects.toThrow('body failure')
 
-    const destroyed: Error[] = []
+    // Drained, not destroyed: a handler that stops reading (an over-cap body
+    // refused with 413) still has a response to write, and destroying the
+    // request would reset the connection before it went out.
+    let resumed = 0
+    let destroys = 0
     const cancelled = Object.assign(new Readable({ read() {} }), {
       url: '/x', method: 'POST', headers: {},
-      destroy: (error?: Error) => { destroyed.push(error ?? new Error('destroyed')) },
+      resume: () => { resumed += 1 },
+      destroy: () => { destroys += 1 },
     }) as unknown as IncomingMessage
     await toFetchRequest(cancelled, res).body!.cancel()
-    expect(destroyed).toHaveLength(1)
+    expect(resumed).toBeGreaterThanOrEqual(1)
+    expect(destroys).toBe(0)
   })
 
   it('writeFetchResponse returns once the socket closes while waiting for drain', async () => {

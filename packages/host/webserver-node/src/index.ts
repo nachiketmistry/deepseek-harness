@@ -145,7 +145,11 @@ function toReadableStream(req: IncomingMessage): ReadableStream<Uint8Array> {
       req.on('error', (error) => { controller.error(error) })
     },
     cancel() {
-      req.destroy()
+      // Drain rather than destroy: a handler that stops reading still has a
+      // response to deliver (an over-cap body is refused with 413), and
+      // destroying the request resets the connection before it can be written.
+      // The refusal carries `connection: close`, so the socket ends after it.
+      req.resume()
     },
   })
 }

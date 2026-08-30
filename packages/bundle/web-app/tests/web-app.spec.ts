@@ -72,8 +72,7 @@ function stageDist(): string {
 function fakeHttpServer(host: '127.0.0.1' | '0.0.0.0' = '127.0.0.1'): { server: WebServer; seat: () => unknown } {
   let fallback: unknown
   const server = {
-    host,
-    port: 4567,
+    address: { host, port: 4567 },
     registerFallback: (handler: unknown) => {
       fallback = handler
       return () => { fallback = undefined }
@@ -313,19 +312,20 @@ describe('web-app runtime glue', () => {
     await torn.fiber.dispose()
   })
 
-  it('fails loud when the prompt section resolves against a portless webserver', async () => {
+  it('fails loud at load against a carrier that owns no listener', async () => {
     stageDist()
     const ctx = new Context()
-    // A webserver whose bound port is gone (torn down mid-request): the
-    // section must throw, never render a URL with an undefined port.
+    // This bundle is the Node web surface: it samples the bound address for
+    // LAN trust and the URL line, so a carrier with no listener of its own
+    // (the platform provider, whose address the platform owns) is a
+    // composition error and must be refused where it is composed.
     const { server } = fakeHttpServer()
-    Object.defineProperty(server, 'port', { get: () => undefined })
+    Object.defineProperty(server, 'address', { get: () => undefined })
     ctx.provide('webServer', server)
     provideConnection(ctx)
-    apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: true, trustedHosts: [] }))
-    await ctx.plugin(SystemPrompt, { persona: '' })
-    await new Promise(resolve => setTimeout(resolve, 0))
-    await expect(ctx.systemPrompt.assemble()).rejects.toThrow('webServer service missing')
+    expect(() => {
+      apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: true, trustedHosts: [] }))
+    }).toThrow('owns no listener')
     await ctx.fiber.dispose()
   })
 

@@ -19,6 +19,7 @@ let source: FilesystemAgentPresetSource
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'dsh-preset-source-'))
   const ctx = new Context()
+  ctx.baseUrl = pathToFileURL(root).href + '/'
   await ctx.plugin(Loader)
   await ctx.plugin(FilesystemAgentPresetSource, { roots: [{ path: root, trust: 'user' }], includeShippedRoot: false, includeUserRoot: false })
   source = ctx.agentPresetSource as FilesystemAgentPresetSource

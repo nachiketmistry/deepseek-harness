@@ -97,7 +97,10 @@ describe('bootEntries', () => {
     await expect(bootEntries('test', rows, {
       modules,
       prepare: () => { throw new Error('no host') },
-    })).rejects.toThrow('test: host preparation failed: no host')
+      // The label carries the cause's stack, not just its message: a boot
+      // failure is read by an operator with no debugger attached, and the
+      // frame that threw is the part that names the offending row.
+    })).rejects.toThrow(/test: host preparation failed: Error: no host\n\s+at /)
     await expect(bootEntries('test', rows, {
       modules,
       prepare: () => { throw 'plain' },

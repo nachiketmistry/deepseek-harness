@@ -10,6 +10,7 @@ import { Context, type Fiber } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { renderIndexInjections, type WebServer, type WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import * as modulesClient from '../src/client/index.ts'
+import { NodeClientBundleSource } from '@deepseek-ai/dsh-client-bundle-source-node'
 import { ClientModuleRegistry, bootInjections, orderByModuleGraph } from '../src/index.ts'
 import type { ClientModuleLoaderTarget, WebBootEntry, WebBootGraph } from '../src/client/index.ts'
 
@@ -90,6 +91,9 @@ function constructWithRoute(
     tapIndex: () => () => {},
   }
   ctx.provide('webServer', webServer as WebServer)
+  // The registry reads declarations and bytes only through the source seam;
+  // these cases cover the pair, so the real Node provider stands behind it.
+  new NodeClientBundleSource(ctx)
   const service = new ClientModuleRegistry(ctx)
   if (route === undefined) throw new Error('client bundle route was not registered')
   return { context: ctx, service, route }

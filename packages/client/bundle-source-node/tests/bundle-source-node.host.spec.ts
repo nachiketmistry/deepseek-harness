@@ -49,9 +49,15 @@ function base(): string {
   return pathToFileURL(root!).href + '/'
 }
 
-/** Construct the source; resolution happens per call, against the base a row's tree carries. */
+/**
+ * Construct the source over a Loader carrying no module internals, which is
+ * the arm that falls back to tree-anchored `require` resolution — what these
+ * fixture packages under a temporary `node_modules` exercise.
+ */
 function construct(): NodeClientBundleSource {
-  return new NodeClientBundleSource(new Context())
+  const ctx = new Context()
+  ctx.provide('loader', { internal: undefined })
+  return new NodeClientBundleSource(ctx)
 }
 
 describe('NodeClientBundleSource', () => {

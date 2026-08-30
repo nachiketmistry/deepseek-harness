@@ -278,7 +278,7 @@ describe('rejecting a composition that cannot be used', () => {
     // message names none of them; unflattened, the operator is told only that
     // "loader entries failed to apply" and has nothing to act on.
     await expect(agentOn(ctx, 'sess-two-broken', 'two-broken'))
-      .rejects.toThrow(/first-missing[\s\S]*second-missing/)
+      .rejects.toThrow(/first-refuses[\s\S]*second-refuses/)
   })
 
   it('names the unresolved service when a row never activates', async () => {
@@ -390,6 +390,7 @@ describe('the preset roster', () => {
 
   it('reports authoring as unavailable when the source has nowhere to write', async () => {
     const readOnly = new Context()
+    readOnly.baseUrl = pathToFileURL(FIXTURES).href + '/'
     await readOnly.plugin(Loader)
     await readOnly.plugin(MemoryPresetSource, { entries: [fixturePreset(SYSTEM, 'standard', 'system')], writable: false })
     await readOnly.plugin(AgentPresets, { default: 'standard' })
@@ -438,6 +439,7 @@ describe('composing from a broken preset', () => {
 describe('a roster with nothing in it', () => {
   it('says so instead of naming an empty list of candidates', async () => {
     const bare = new Context()
+    bare.baseUrl = pathToFileURL(FIXTURES).href + '/'
     await bare.plugin(Loader)
     await bare.plugin(MemoryPresetSource, { entries: [] })
     await bare.plugin(AgentPresets, { default: 'standard' })

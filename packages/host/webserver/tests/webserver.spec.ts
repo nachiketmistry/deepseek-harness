@@ -165,20 +165,30 @@ describe('WebServer index rendering', () => {
     expect(server.renderIndex('<head></head><body></body>')).toContain('window.__Q__=2')
     untap()
 
-    // Tag-less fragments: head rows prepend, body rows append.
+    // Tag-less fragments: head rows prepend, body rows append, and the
+    // boot-readiness tail follows the last body row.
     expect(renderIndexInjections('<main>x</main>', [
       { kind: 'script', placement: 'head', text: 'H' },
       { kind: 'script', placement: 'body', text: 'B' },
-    ])).toBe('<script>H</script><main>x</main><script>B</script>')
+    ])).toBe(
+      '<script>H</script><main>x</main><script>B</script>'
+      + '<script>(globalThis.__DSH_BOOT_READY__ ??= Promise.withResolvers()).resolve()</script>',
+    )
 
     // A global without a value assigns `undefined`; attributed tags still match.
     expect(renderIndexInjections('<HEAD lang="en"><body class="x">', [
       { kind: 'global', name: 'flag', value: undefined },
       { kind: 'html', placement: 'body', html: '<b/>' },
-    ])).toBe('<HEAD lang="en"><script>globalThis["flag"] = undefined</script><body class="x"><b/>')
+    ])).toBe(
+      '<HEAD lang="en"><script>globalThis["flag"] = undefined</script><body class="x"><b/>'
+      + '<script>(globalThis.__DSH_BOOT_READY__ ??= Promise.withResolvers()).resolve()</script>',
+    )
 
-    // An empty table leaves the html untouched.
-    expect(renderIndexInjections('<main/>', [])).toBe('<main/>')
+    // An empty table still carries the boot-readiness tail: the client entry
+    // awaits it before reading injected state, so a page with no rows must
+    // settle it rather than hang.
+    expect(renderIndexInjections('<main/>', []))
+      .toBe('<main/><script>(globalThis.__DSH_BOOT_READY__ ??= Promise.withResolvers()).resolve()</script>')
 
     // A row of unknown kind is a programming error at the renderer.
     expect(() => renderIndexInjections('', [{ kind: 'bogus' } as unknown as Parameters<typeof renderIndexInjections>[1][number]]))

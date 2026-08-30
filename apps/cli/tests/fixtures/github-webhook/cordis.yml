@@ -22,7 +22,7 @@
         webServer: true
       config:
         - id: github-webhook-real-e2e-server
-          name: '@deepseek-ai/dsh-host-webserver'
+          name: '@deepseek-ai/dsh-host-webserver-node'
           config:
             host: '127.0.0.1'
             port: !!js Number(process.env.DSH_GITHUB_WEBHOOK_PORT)

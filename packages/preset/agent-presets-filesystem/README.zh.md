@@ -1,6 +1,13 @@
+---
+description: "Filesystem Service Provider of the agent-preset source: the bundled shipped presets, configured roots, the harness-home authoring root, and the stat stamp a standing generation is keyed on."
+kind: "package-reference"
+---
+
 # dsh-agent-presets-filesystem
 
 [English](README.md) | 中文
+
+## 概述
 
 agent-preset 来源 seam 的**文件系统 Service Provider**（[`dsh-agent-presets`](../agent-presets/README.zh.md) 拥有 `AgentPresetSource` Service Definition 以及消费它的注册表）。一个 preset 是一个目录，其中放置一份 `agent.cordis.yml`，可选地在旁边放一份带展示文本的 `preset.yml`；目录名即 preset id。加载本插件会提供 `ctx.agentPresetSource`，roster 行注入它。
 
@@ -8,12 +15,26 @@ agent-preset 来源 seam 的**文件系统 Service Provider**（[`dsh-agent-pres
 - id: agent-preset-source
   name: '@deepseek-ai/dsh-agent-presets-filesystem'
   config:
+    includeShippedRoot: true
     includeUserRoot: true
 - id: agent-presets
   name: '@deepseek-ai/dsh-agent-presets'
   config:
     default: standard
 ```
+
+## 目录
+
+- [Service Provider](#service-provider)
+- [配置](#配置)
+- [创作](#创作)
+- [模型体验](#模型体验)
+- [已知限制与暂缓事项](#已知限制与暂缓事项)
+- [开发备注](#开发备注)
+
+---
+
+<a id="service-provider"></a>
 
 ## Service Provider：`FilesystemAgentPresetSource`（ctx 键：`agentPresetSource`）
 
@@ -29,6 +50,8 @@ agent-preset 来源 seam 的**文件系统 Service Provider**（[`dsh-agent-pres
 
 模块还导出宿主或测试直接组合的部件：`COMPOSITION_FILE`、`METADATA_FILE`、`USER_PRESET_DIR`、`discoverPresets`、`scanRoot`、`readPresetMetadata`、`renderPresetMetadata`、`writableRoot`、`readComposition`、`copyComposition` 与 `deleteComposition`。
 
+<a id="配置"></a>
+
 ## 配置
 
 | 字段 | 默认值 | 含义 |
@@ -38,13 +61,15 @@ agent-preset 来源 seam 的**文件系统 Service Provider**（[`dsh-agent-pres
 
 根目录不存在时视为不提供任何 preset，而非失败：用户根目录在写出第一个本地 preset 之前并不存在，而指定了没有任何根目录提供的默认值，在注册表解析时本就会明确报错。
 
-### 可写根目录属于本包，随附根目录属于 app
+### 两个派生根目录都属于本包
 
 `<dshHome>/.agent-presets` 是个人自有 preset 的所在，正如 `<dshHome>/skills` 是其自有 skill 的所在（[`dsh-skill-filesystem`](../../skill/skill-filesystem/README.zh.md)），因此来源自行推导它，而不等某个部署记得配置——一个什么都没配的启动器同样能发现并创作 preset。它追加在全部已配置根目录**之后**，从而保持靠前的根目录赢得重复 id：随附的 `standard` 仍然遮蔽一个占用该名字的家目录目录，而注册表会拒绝该 id，不会落下一个无人解析得到的 preset。
 
 `includeUserRoot: false` 使来源只提供 `roots` 中的 preset。把 preset 限制在自有目录内的部署需要它，任何钉住确切 roster 的测试同样需要——否则将由这台机器真实的 `<dshHome>` 决定 roster 的内容。
 
-随附根目录仍然是装配事实：它位于已安装 app 自身配置的旁边，那个路径只有该 app 能解析，`apps/cli` 在启动时把它打到本行上。
+随附根目录就是本包的 `presets/` 目录，被前置在每个配置根目录之前，因此随附集合总会挂载并在 id 重名时胜出。这不涉及任何 launcher 打补丁：只要组合里写了这一行，就能拿到随附 preset。`includeShippedRoot: false` 会丢弃它们，供只提供自有 preset 的部署使用。
+
+<a id="创作"></a>
 
 ## 创作
 
@@ -71,6 +96,8 @@ order: 1
 
 任何读取失败都退化为「没有元信息」——缺失、格式错误、类型不对、内容为空，含义相同，选择器回退到 id。展示不是能力：名字坏掉的 preset 依然能挂载。
 
+<a id="模型体验"></a>
+
 ## 模型体验
 
 Indirectly, through [`dsh-agent-presets`](../agent-presets/README.zh.md), whose standing mount installs the rows this source reads; those plugins own every tool schema and prompt section a preset makes visible.
@@ -79,9 +106,15 @@ Indirectly, through [`dsh-agent-presets`](../agent-presets/README.zh.md), whose 
 
 不直接使缓存失效；请求前缀的任何变化由上述消费方负责。
 
+<a id="已知限制与暂缓事项"></a>
+
 ## 已知限制与暂缓事项
 
 - **位于可写根目录之外的 preset 可被发现却无法删除** —— `remove()` 拒绝任何不在**第一个** `user` 根目录下的 preset，因此一个既配置了自有可写根、又保留 `includeUserRoot` 的部署，会列出并挂载 harness home 下的 preset，却对每次删除回答「它不在可写 preset 根目录之下」。来源按设计只有一个可写根；只想要自有根的部署应设置 `includeUserRoot: false`。
 - **stamp 只以组装文件为准** —— `agent.cordis.yml` 的变化会在注册表中开启新代际，旁边 skill 文件或资产的编辑则不会；那些编辑要等组装文件本身变动或进程重启才达到新会话。
 - **健康是形状检查，不是挂载** —— 发现过程只证明组装能以加载器方言解析、由具名行组成，不证明每一行的模块都能解析并激活；引用不存在的包的行仍在第一个会话处失败，并回滚该会话的创建。
 - **根目录扫描不做监听** —— 每次读取都实际访问文件系统，这让名单保持新鲜，但每次 `list()` 会对每个根目录产生一次 `readdir`，并对每个 preset 产生一次读取与解析。
+
+### 开发备注
+
+当 preset 来源成为 Service Definition 时，发现、创作、元信息以及随附的 `presets/` 目录一并移到了这里。注册表保留词汇、常驻挂载与行 specifier 分类，因为挂载与健康检查必须以同样的方式解析一行。

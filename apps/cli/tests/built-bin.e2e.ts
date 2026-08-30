@@ -917,7 +917,7 @@ describe.skipIf(!existsSync(dshBin))('dsh BUILT bin (node lib/bin.js, no tsx)', 
       expect(stdout).toContain("name: '@deepseek-ai/dsh-agent-loop'")
       expect(stdout).toContain('agents: []')
       expect(stdout).toContain('# == @deepseek-ai/dsh-base')
-      expect(stdout).toContain("name: '@deepseek-ai/dsh-host-webserver'")
+      expect(stdout).toContain("name: '@deepseek-ai/dsh-host-webserver-node'")
       expect(existsSync(join(home, 'profiles', 'node_modules'))).toBe(false)
     }, SPAWN_TIMEOUT_MS + 30_000)
 

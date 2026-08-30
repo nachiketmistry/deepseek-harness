@@ -1,6 +1,13 @@
+---
+description: "Filesystem Service Provider of the agent-preset source: the bundled shipped presets, configured roots, the harness-home authoring root, and the stat stamp a standing generation is keyed on."
+kind: "package-reference"
+---
+
 # dsh-agent-presets-filesystem
 
 English | [中文](README.zh.md)
+
+## Summary
 
 The **filesystem Service Provider** of the agent-preset source seam ([`dsh-agent-presets`](../agent-presets/README.md) owns the `AgentPresetSource` Service Definition and the registry that consumes it). A preset is a directory holding one `agent.cordis.yml`, optionally beside a `preset.yml` with display text; the directory name is the preset id. Loading this plugin populates `ctx.agentPresetSource`, which the roster row injects.
 
@@ -8,12 +15,26 @@ The **filesystem Service Provider** of the agent-preset source seam ([`dsh-agent
 - id: agent-preset-source
   name: '@deepseek-ai/dsh-agent-presets-filesystem'
   config:
+    includeShippedRoot: true
     includeUserRoot: true
 - id: agent-presets
   name: '@deepseek-ai/dsh-agent-presets'
   config:
     default: standard
 ```
+
+## Table of Contents
+
+- [Service Provider](#service-provider)
+- [Config](#config)
+- [Authoring](#authoring)
+- [Model Experience](#model-experience)
+- [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
+- [Dev Note](#dev-note)
+
+---
+
+<a id="service-provider"></a>
 
 ## Service Provider: `FilesystemAgentPresetSource` (ctx key: `agentPresetSource`)
 
@@ -29,6 +50,8 @@ The **filesystem Service Provider** of the agent-preset source seam ([`dsh-agent
 
 The module also exports the pieces a host or test composes directly: `COMPOSITION_FILE`, `METADATA_FILE`, `USER_PRESET_DIR`, `discoverPresets`, `scanRoot`, `readPresetMetadata`, `renderPresetMetadata`, `writableRoot`, `readComposition`, `copyComposition`, and `deleteComposition`.
 
+<a id="config"></a>
+
 ## Config
 
 | Field | Default | Meaning |
@@ -38,13 +61,15 @@ The module also exports the pieces a host or test composes directly: `COMPOSITIO
 
 An absent root supplies no presets rather than failing: the user root does not exist until the first locally authored preset, and naming a default no root supplies already fails loud at the registry's resolution.
 
-### The writable root is this package's, the shipped root is the app's
+### Both derived roots are this package's
 
 `<dshHome>/.agent-presets` is where a person's own presets live, the way `<dshHome>/skills` is where their own skills live ([`dsh-skill-filesystem`](../../skill/skill-filesystem/README.md)), so the source derives it rather than waiting for a deployment to remember it — a launcher that configures nothing still finds and authors presets. It is appended AFTER every configured root, which keeps an earlier root winning a duplicate id: a shipped `standard` still shadows a home directory that claimed the name, and the registry refuses that id rather than landing a preset nothing would resolve.
 
 `includeUserRoot: false` supplies presets from `roots` alone. A deployment that confines presets to its own directories needs it, and so does any test pinning an exact roster — otherwise the machine's real `<dshHome>` decides what the roster contains.
 
-The SHIPPED root stays an assembly fact: it sits beside the installed app's own config, a path only that app can resolve, and `apps/cli` patches it onto this row at boot.
+The SHIPPED root is this package's `presets/` directory, prepended BEFORE every configured root so the shipped set always mounts and wins a duplicate id. No launcher patching is involved: a composition that names this row gets the shipped presets. `includeShippedRoot: false` drops them, for a deployment supplying purely its own.
+
+<a id="authoring"></a>
 
 ## Authoring
 
@@ -71,6 +96,8 @@ It carries display text ONLY. `id` is the directory name and `trust` comes from 
 
 Every read failure degrades to no metadata — absent, malformed, wrongly typed, or blank all mean the same thing, and a picker falls back to the id. Presentation is not capability: a preset with a broken name still mounts.
 
+<a id="model-experience"></a>
+
 ## Model Experience
 
 Indirectly, through [`dsh-agent-presets`](../agent-presets/README.md), whose standing mount installs the rows this source reads; those plugins own every tool schema and prompt section a preset makes visible.
@@ -79,9 +106,15 @@ Indirectly, through [`dsh-agent-presets`](../agent-presets/README.md), whose sta
 
 No direct invalidation; the named consumer owns any request-prefix changes.
 
+<a id="known-limitations-and-deferred-work"></a>
+
 ## Known Limitations and Deferred Work
 
 - **A preset outside the writable root is discoverable but not deletable** — `remove()` refuses anything that does not live under the FIRST `user` root, so a deployment that configures its own writable root while leaving `includeUserRoot` on lists the harness-home presets, mounts them, and then answers "it does not live under the writable preset root" for every delete. The source carries one writable root by design; a deployment that wants only its own sets `includeUserRoot: false`.
 - **The stamp is the composition file alone** — `agent.cordis.yml` changing starts a new generation in the registry, an edit to a skill file or asset beside it does not; those reach new sessions only once the composition file itself moves or the process restarts.
 - **Health is a shape check, not a mount** — discovery proves the composition parses in the loader dialect and holds named rows, not that every row's module resolves or activates; a row naming an absent package still fails at the first session, which rolls the creation back.
 - **Root scans are not watched** — every read hits the filesystem instead, which keeps the roster fresh but puts one `readdir` per root plus one read-and-parse per preset on each `list()`.
+
+### Dev Note
+
+Discovery, authoring, metadata, and the shipped `presets/` directory moved here when the preset source became a Service Definition. The registry keeps the vocabulary, the standing mount, and row-specifier classification, because a mount and a health check must resolve a row the same way.

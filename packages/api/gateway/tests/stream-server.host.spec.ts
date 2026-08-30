@@ -225,8 +225,9 @@ async function connect(url: string): Promise<WebSocket> {
 }
 
 function acceptedSocket(mux: RemoteStreamMuxServer): WebSocket {
-  const exposed = mux as unknown as { server: { clients: Set<WebSocket> } }
-  const socket = [...exposed.server.clients][0]
+  // The mux owns the sockets the carrier handed it, not a listening server.
+  const exposed = mux as unknown as { sockets: Set<WebSocket> }
+  const socket = [...exposed.sockets][0]
   if (socket === undefined) throw new Error('fixture mux has no accepted socket')
   return socket
 }

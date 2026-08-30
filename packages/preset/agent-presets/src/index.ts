@@ -722,7 +722,15 @@ export class AgentPresets extends TypertRemoteService {
         // its rows were read under: an edit racing the mount makes that stamp
         // stale rather than silently current, so the next session refreshes
         // instead of trusting a composition older than its stamp.
-        const composition = await this.source.composition(preset)
+        // A source that cannot produce rows fails as a mount failure, not as
+        // its own read error: the caller is starting a session and needs the
+        // preset named, which `mountPreset` guarantees for every later step.
+        let composition
+        try {
+          composition = await this.source.composition(preset)
+        } catch (error) {
+          throw new PresetMountError(preset.id, `composition could not be read: ${String(error)}`, { cause: error })
+        }
         await mountPreset(scope.ctx, preset, composition)
         return { key, scope, stamp: composition.stamp }
       } catch (error) {

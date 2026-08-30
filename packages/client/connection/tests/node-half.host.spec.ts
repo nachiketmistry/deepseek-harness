@@ -68,7 +68,10 @@ async function recorded(response: Response): Promise<{
   }
 }
 
-async function mounted(config?: { trustedHosts?: string[] }): Promise<{
+async function mounted(
+  config?: { trustedHosts?: string[]; launchTokenRef?: string },
+  refs?: Record<string, string>,
+): Promise<{
   routes: WebRoute[]
   upgrades: WebSocketRoute[]
   connection: HostConnectionHandle
@@ -77,7 +80,8 @@ async function mounted(config?: { trustedHosts?: string[] }): Promise<{
   const ctx = new Context()
   const routes: WebRoute[] = []
   const upgrades: WebSocketRoute[] = []
-  provideBrowserCredentials(ctx)
+  const credentials = provideBrowserCredentials(ctx)
+  for (const [ref, value] of Object.entries(refs ?? {})) credentials.refs.set(ref, value)
   ctx.provide('webServer', fakeHttpServer(routes, upgrades) as WebServer)
   const fiber = ctx.plugin({ inject: [...inject], apply }, config)
   await fiber.await()
@@ -103,6 +107,19 @@ function browserCookie(connection: HostConnectionHandle, authority: string): str
 }
 
 describe('connection node half', () => {
+  it('takes the launch token from the configured reference and fails loud without it', async () => {
+    const token = 'deployment-launch-token-00000000'
+    const configured = await mounted({ launchTokenRef: 'DSH_LAUNCH_TOKEN' }, { DSH_LAUNCH_TOKEN: token })
+    expect(new URL(configured.connection.authenticatedUrl('http://127.0.0.1:3080')).searchParams.get('token'))
+      .toBe(token)
+    await configured.dispose()
+
+    await expect(mounted({ launchTokenRef: 'DSH_LAUNCH_TOKEN' }))
+      .rejects.toThrow(/launchTokenRef "DSH_LAUNCH_TOKEN" is unset/u)
+    await expect(mounted({ launchTokenRef: 'not a ref' }, { 'not a ref': token }))
+      .rejects.toThrow(/credential ref "not a ref" must match/u)
+  })
+
   it('reserves enough default carrier capacity for the 200 MiB image batch', () => {
     expect(DEFAULT_MAX_REQUEST_BODY_BYTES).toBe(300 * 1024 * 1024)
     expect(DEFAULT_MAX_REQUEST_BODY_BYTES).toBeGreaterThan(Math.ceil(200 * 1024 * 1024 * 4 / 3) + 1024 * 1024)

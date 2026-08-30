@@ -10,6 +10,16 @@ The dsh web GUI assembled for Cloudflare: a Worker serves the browser shell, one
 
 Results: the complete tree bundles with zero unresolved imports (0.98 MiB gzip); the CF target composition is 0.37 MiB gzip and every one of its 107 package modules evaluates under local workerd and under production workerd (a throwaway Worker importing the same per-package bundles reports 107 passed, 0 failed). Production differs from local workerd in two ways the local gate cannot see: `new Function` throws `EvalError: Code generation from strings disallowed`, and `import.meta.url` is undefined, so `createRequire(import.meta.url)` and `new URL(relative, import.meta.url)` throw at module load. The tree now avoids both on the load path (self-package JSON imports instead of `createRequire`, a lazily built `!!js` evaluator in the vendored loader); the one disk-asset provider that still resolves `import.meta.url` at load (`dsh-skill-badge`) is excluded from the CF composition until an asset-backed provider replaces it. Every remaining Node coupling in the target composition is call-time (a provider touching disk, a process, or a listening socket at mount), which is what the `packages/cf/*` Service Providers replace behind the existing Service Definitions.
 
+## Deploying and signing in
+
+The deployment holds its own launch token, because a Worker has no terminal to print a generated one to and the platform restarts the Durable Object whenever it likes. Set it once before the first deploy, as a Worker secret of at least 32 characters:
+
+```sh
+wrangler secret put DSH_LAUNCH_TOKEN
+```
+
+`connection` is composed with `launchTokenRef: DSH_LAUNCH_TOKEN` (`scripts/compose.mjs`; `DSH_CF_LAUNCH_TOKEN_REF` renames it at build time) and resolves it through the Cloudflare credential store, which falls back to the Worker secret of that name. A deployment whose secret is unset fails its boot rather than serving a GUI nobody can enter. Sign in by opening `https://<public host>/?token=<the secret>` once: the index response exchanges the token for the browser-session cookie and redirects to a clean `/`. The cookie's signing secret is durable, so the session survives isolate restarts and redeploys.
+
 ## Layout
 
 - `scripts/workspace-resolver.mjs` resolves `@deepseek-ai/*` imports to each package's built `lib/` through its `exports` map with the `workerd` condition, so the Worker consumes the published artifact plane, never workspace source.

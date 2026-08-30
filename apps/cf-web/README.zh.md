@@ -10,6 +10,16 @@
 
 结果：完整树打包无任何未解析导入（gzip 0.98 MiB）；CF 目标组合 gzip 0.40 MiB，其 108 个包模块全部可在 workerd 下求值。目标组合中的每一处 Node 耦合都发生在调用时（某个 provider 在挂载时触碰磁盘、进程或监听套接字），这正是 `packages/cf/*` 的 Service Provider 在现有 Service Definition 之后所替换的部分。
 
+## 部署与登录
+
+部署自行持有其启动 token，因为 Worker 没有终端可打印生成的 token，而平台会随时重启 Durable Object。首次部署前设置一次，作为不短于 32 个字符的 Worker secret：
+
+```sh
+wrangler secret put DSH_LAUNCH_TOKEN
+```
+
+`connection` 以 `launchTokenRef: DSH_LAUNCH_TOKEN` 组合（见 `scripts/compose.mjs`；`DSH_CF_LAUNCH_TOKEN_REF` 可在构建时改名），并经 Cloudflare 凭据存储解析，该存储会回退到同名的 Worker secret。secret 未设置的部署会让启动失败，而不是提供一个无人能进入的 GUI。登录方式是打开一次 `https://<公开主机>/?token=<该 secret>`：index 响应用该 token 换取浏览器会话 cookie，并重定向到干净的 `/`。cookie 的签名密钥是持久的，因此会话可跨 isolate 重启与重新部署存活。
+
 ## 目录结构
 
 - `scripts/workspace-resolver.mjs` 通过各包 `exports` 映射并带 `workerd` 条件，把 `@deepseek-ai/*` 导入解析到已构建的 `lib/`，因此 Worker 消费的是已发布的产物平面，从不消费工作区源码。

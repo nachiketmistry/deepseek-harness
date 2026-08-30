@@ -85,13 +85,6 @@ function webSurfacePrompt(webUrl: string): string {
  */
 export function apply(ctx: Context, config: Config): void {
   const assets = ctx.cf.binding(config.assets) as AssetsBinding
-  // The Node surface prints this line to a terminal the operator is watching.
-  // A Worker has no terminal, so the deployment's own log stream is the one
-  // place the launch token can be read, once per isolate that mints one.
-  // `console` rather than `ctx.logger`, for the same reason `dsh web` prints
-  // rather than logs: this is an operator handoff, not a diagnostic, and it
-  // must not depend on a composed exporter or its level.
-  console.log(`dsh web: ${ctx.connection.authenticatedUrl(config.publicUrl)}`)
   ctx.effect(() => ctx.webServer.registerFallback(async (request) => {
     if (request.method !== 'GET' && request.method !== 'HEAD') return new Response(null, { status: 405 })
     const url = new URL(request.url)

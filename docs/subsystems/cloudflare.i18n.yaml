@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/subsystems/cloudflare.md
-cloudflare.md: e39fd5a23953d24a5d554bec409275e105be30fe
-cloudflare.zh.md: 794b336f4c5552d5ebdf3e1ed008e9b66d533ae5
+cloudflare.md: d93d5a7f0f5c4fb06bf69872e857b331fc1036ea
+cloudflare.zh.md: 108a435b579dd2a95bb693b635c3c437125f3059

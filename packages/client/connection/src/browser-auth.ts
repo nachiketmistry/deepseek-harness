@@ -18,6 +18,13 @@ const COOKIE_PAYLOAD_VERSION = 1
 const STORED_SECRET_VERSION = 1
 const BASE64URL_PATTERN = /^[A-Za-z0-9_-]*$/
 const PROCESS_LAUNCH_TOKENS = new WeakMap<object, string>()
+/**
+ * Shortest deployment-supplied launch token accepted. The generated token is
+ * 32 random bytes as 43 base64url characters; a supplied one is the whole
+ * bootstrap credential of a reachable deployment, so it may be a different
+ * alphabet but not a guessable length.
+ */
+const MINIMUM_SUPPLIED_TOKEN_CHARS = 32
 
 interface StoredSecretPayload {
   readonly version: typeof STORED_SECRET_VERSION
@@ -117,9 +124,19 @@ function cookieValue(headerValue: string, name: string): string | undefined {
   return undefined
 }
 
-/** Serialize the fixed browser-session attributes; generated names and values are cookie-safe base64url. */
-function sessionCookie(name: string, value: string, expiresAt: number, maxAgeSeconds: number): string {
-  return `${name}=${value}; Max-Age=${String(maxAgeSeconds)}; Path=/; Expires=${new Date(expiresAt).toUTCString()}; HttpOnly; SameSite=Strict`
+/**
+ * Serialize the fixed browser-session attributes; generated names and values are cookie-safe base64url.
+ * `Secure` is added for an index request that arrived over HTTPS, which the
+ * loopback Node server never does and a Worker always does.
+ */
+function sessionCookie(
+  name: string,
+  value: string,
+  expiresAt: number,
+  maxAgeSeconds: number,
+  secure: boolean,
+): string {
+  return `${name}=${value}; Max-Age=${String(maxAgeSeconds)}; Path=/; Expires=${new Date(expiresAt).toUTCString()}; HttpOnly; SameSite=Strict${secure ? '; Secure' : ''}`
 }
 
 function signature(secret: Buffer, body: string): Buffer {
@@ -190,8 +207,15 @@ export class BrowserAuth {
     processOwner: object,
     private readonly secret: Buffer,
     maxAgeDays: number,
+    suppliedToken: string | undefined,
   ) {
-    this.launchToken = processLaunchToken(processOwner)
+    if (suppliedToken !== undefined && suppliedToken.length < MINIMUM_SUPPLIED_TOKEN_CHARS) {
+      throw new Error(
+        'client-connection: the configured launch token is shorter than '
+        + `${String(MINIMUM_SUPPLIED_TOKEN_CHARS)} characters`,
+      )
+    }
+    this.launchToken = suppliedToken ?? processLaunchToken(processOwner)
     this.maxAgeMilliseconds = maxAgeDays * DAY_MILLISECONDS
     if (!Number.isSafeInteger(this.maxAgeMilliseconds)
       || !Number.isSafeInteger(Date.now() + this.maxAgeMilliseconds)) {
@@ -205,14 +229,18 @@ export class BrowserAuth {
    * @param processOwner - root application context retaining one token across Connection reloads.
    * @param credentials - persistent credential provider for the Web profile.
    * @param maxAgeDays - positive absolute browser-cookie lifetime in days.
-   * @returns initialized authentication owner with the process owner's launch token.
+   * @param suppliedToken - deployment-supplied launch token; without one the
+   * launch token is generated per process, which only a surface that can hand
+   * the operator the fresh URL can use.
+   * @returns initialized authentication owner with the supplied or process launch token.
    */
   static async create(
     processOwner: object,
     credentials: CredentialProvider,
     maxAgeDays: number,
+    suppliedToken?: string,
   ): Promise<BrowserAuth> {
-    return new BrowserAuth(processOwner, await initializeSecret(credentials), maxAgeDays)
+    return new BrowserAuth(processOwner, await initializeSecret(credentials), maxAgeDays, suppliedToken)
   }
 
   /**
@@ -259,6 +287,7 @@ export class BrowserAuth {
           'referrer-policy': 'no-referrer',
           'set-cookie': sessionCookie(
             cookieName(authority), value, expiresAt, Math.floor(this.maxAgeMilliseconds / 1000),
+            url.protocol === 'https:',
           ),
         })
         res.end()

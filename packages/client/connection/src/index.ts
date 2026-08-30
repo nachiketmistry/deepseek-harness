@@ -2,7 +2,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-attachment'
-import type {} from '@deepseek-ai/dsh-credentials'
+import { credentialRef } from '@deepseek-ai/dsh-credentials'
 // Activates the webServer Context merge used below.
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import { API_PATH } from './api-path.ts'
@@ -77,6 +77,14 @@ export interface ConnectionConfig {
    * bind. An entry that is not a bare, canonical authority fails plugin load.
    */
   trustedHosts?: string[]
+  /**
+   * Credential reference holding this deployment's launch token, for a
+   * surface that cannot hand the operator a freshly generated one. Without
+   * it the launch token is generated per process and reaches the operator
+   * only through the surface that started it, which a deployment restarted
+   * by its platform has no way to do. The reference must resolve at load.
+   */
+  launchTokenRef?: string
   /** Absolute browser-session lifetime in days. Default: 30. */
   cookieMaxAgeDays?: number
   /** Maximum buffered JSON body for every `/api` request. Default: 300 MiB. */
@@ -85,9 +93,28 @@ export interface ConnectionConfig {
 
 export const Config: z<ConnectionConfig> = z.object({
   trustedHosts: z.array(String).default([]),
+  launchTokenRef: z.string().role('credential-ref'),
   cookieMaxAgeDays: z.natural().min(1).default(30),
   maxRequestBodyBytes: z.natural().min(1).default(DEFAULT_MAX_REQUEST_BODY_BYTES),
 })
+
+/**
+ * Resolve the deployment's configured launch token.
+ * @param ctx - Host plugin context carrying the credential provider.
+ * @param ref - configured credential reference, or undefined for a per-process token.
+ * @returns the resolved token, or undefined when none is configured.
+ * @throws when the reference is not a credential-reference name, or resolves
+ * to nothing: a deployment that named its bootstrap credential and cannot
+ * read it has no other way to admit its operator.
+ */
+async function suppliedLaunchToken(ctx: Context, ref: string | undefined): Promise<string | undefined> {
+  if (ref === undefined) return undefined
+  const resolved = await ctx.credentials.resolve(credentialRef(ref))
+  if (resolved === undefined) {
+    throw new Error(`client-connection: launchTokenRef "${ref}" is unset in this deployment's credentials`)
+  }
+  return resolved.value
+}
 
 /**
  * Mounts the API gateway under the browser transport prefix. Every request on
@@ -108,7 +135,12 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
   const connection = new HostConnectionService(
     ctx,
     trustedHosts,
-    await BrowserAuth.create(ctx.root, ctx.credentials, cookieMaxAgeDays),
+    await BrowserAuth.create(
+      ctx.root,
+      ctx.credentials,
+      cookieMaxAgeDays,
+      await suppliedLaunchToken(ctx, config?.launchTokenRef),
+    ),
   )
   const fetchHandler = withBodyLimit(connection.createSharedFetchHandler(API_PATH), maxRequestBodyBytes)
   const route: WebRoute = {

@@ -2,7 +2,7 @@
 
 [English](cloudflare.md) | 中文
 
-Cloudflare 子系统是 web Host 的平台一半：与 Node 侧组合的同一棵插件树，挂载在一个 Durable Object 内，树所消费的每条 seam 背后都换成 Workers 形态的 Service Provider。[提案决策](../../.agents/notes/proposed/architecture/2026-08-21-cloudflare-web-host.md)记录了该目标必须通过的各道关卡；[Host 传输 seam 决策](../../.agents/notes/implemented/architecture/2026-08-21-web-host-transport-seams.md)记录了在任何东西能挂载之前、必须先变成 seam 的四处耦合。
+Cloudflare 子系统是 web Host 的平台一半：与 Node 侧组合的同一棵插件树，挂载在一个 Durable Object 内，树所消费的每条 seam 背后都换成 Workers 形态的 Service Provider。[提案决策](../../.agents/notes/proposed/architecture/2026-08-21-cloudflare-web-host.zh.md)记录了该目标必须通过的各道关卡；[Host 传输 seam 决策](../../.agents/notes/implemented/architecture/2026-08-21-web-host-transport-seams.zh.md)记录了在任何东西能挂载之前、必须先变成 seam 的四处耦合。
 
 ## 平台句柄
 
@@ -26,7 +26,7 @@ Cloudflare 子系统是 web Host 的平台一半：与 Node 侧组合的同一�
 
 ## 如何抵达该部署
 
-Host API 要求与 Node 侧相同的浏览器会话，而 index 响应正是用启动 token 换取它的地方。Worker 没有终端，因此指明该 URL 的交接行会写到部署自身的日志流，每个铸造出 token 的 isolate 一次；token 按 isolate 计，因此运维者从一次冷启动中读取它，而不该指望它长期有效。cookie 的签名密钥在 Cloudflare 凭据存储中持久化，因此即便 token 不持久，会话仍能跨 isolate 重启存活。
+Host API 要求与 Node 侧相同的浏览器会话，而 index 响应正是用启动 token 换取它的地方。Node 侧按进程生成该 token，并把它打印到启动它的终端；Worker 两者皆无，而平台会随时重启 Durable Object，因此生成的 token 会在运维者读取并使用它之前就被替换。于是由部署自身提供该 token：`connection` 以 `launchTokenRef: DSH_LAUNCH_TOKEN` 组合，经 Cloudflare 凭据存储解析，而该存储会读取同名的 Worker secret。运维者打开一次 `https://<host>/?token=<该 secret>` 并持有 cookie；启动过程从不记录该 token，因为存活期长于 isolate 的凭据不应进入被持久化的日志流。secret 未设置的部署会让启动失败，而不是提供一个无人能进入的 GUI。cookie 的签名密钥在同一存储中持久化，因此会话能跨 isolate 重启存活；由于 index 请求经 HTTPS 抵达，cookie 带上 `Secure`。
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 

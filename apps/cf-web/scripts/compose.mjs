@@ -22,7 +22,12 @@ const include = await import(join(packages.get('@deepseek-ai/cordis-plugin-inclu
 /** The deployment values the CF composition is parameterized by. */
 export function deploymentOf(env = process.env) {
   const publicHost = env.DSH_CF_PUBLIC_HOST ?? 'dsh-cf-web.shytiger.workers.dev'
-  return { publicHost, publicUrl: `https://${publicHost}`, workspaceRoot: '/workspace' }
+  return {
+    publicHost,
+    publicUrl: `https://${publicHost}`,
+    workspaceRoot: '/workspace',
+    launchTokenRef: env.DSH_CF_LAUNCH_TOKEN_REF ?? 'DSH_LAUNCH_TOKEN',
+  }
 }
 
 /** Literal configs for rows whose web values are `!!js` expressions or Node-specific. */
@@ -33,7 +38,14 @@ function overrides(deployment) {
     ['tools', {}],
     // The Node web runtime's bind-derived trust list becomes the deployment's public host; the
     // row no longer waits for the `webRuntime` service that derived it.
-    ['connection', { trustedHosts: [deployment.publicHost], privilegedHosts: [deployment.publicHost] }],
+    // A Worker has no terminal and is restarted by its platform, so the launch
+    // token is the deployment's own credential rather than one generated per
+    // boot and printed to whoever started the process.
+    ['connection', {
+      trustedHosts: [deployment.publicHost],
+      privilegedHosts: [deployment.publicHost],
+      launchTokenRef: deployment.launchTokenRef,
+    }],
     ['storage-domain', { backend: 'do' }],
     ['api-gateway', { nativeOpen: false, cwd: deployment.workspaceRoot, home: deployment.workspaceRoot }],
   ])

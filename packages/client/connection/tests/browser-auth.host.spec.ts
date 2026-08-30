@@ -55,9 +55,15 @@ function createAuth(
   store: RecordCredentials,
   maxAgeDays = 30,
   processOwner: object = {},
+  suppliedToken?: string,
 ): Promise<BrowserAuth> {
-  return BrowserAuth.create(processOwner, credentials(store), maxAgeDays)
+  return BrowserAuth.create(processOwner, credentials(store), maxAgeDays, suppliedToken)
 }
+
+/** A supplied token at the shortest accepted length. */
+const SUPPLIED_TOKEN = 'deployment-launch-token-00000000'
+/** One character short of the accepted length. */
+const SHORT_TOKEN = SUPPLIED_TOKEN.slice(1)
 
 function request(url: string, authority = '127.0.0.1:3080', init?: {
   cookie?: string
@@ -225,6 +231,45 @@ describe('BrowserAuth', () => {
     expect(reactivated.isAuthenticated(request('/', '127.0.0.1:3080', { cookie: first.cookie }))).toBe(false)
     expect(reactivated.isAuthenticated(request('/', '127.0.0.1:3080', { cookie: second.cookie }))).toBe(true)
     expect(store).toMatchObject({ reads: 0, modifies: 2 })
+  })
+
+  it('keeps a supplied launch token across restarts and refuses a guessable one', async () => {
+    const store = new RecordCredentials()
+    const supplied = await createAuth(store, 30, {}, SUPPLIED_TOKEN)
+    expect(new URL(supplied.authenticatedUrl('http://127.0.0.1:3080')).searchParams.get('token'))
+      .toBe(SUPPLIED_TOKEN)
+
+    const login = exchange(supplied)
+    const restarted = await createAuth(store, 30, {}, SUPPLIED_TOKEN)
+    expect(restarted.authenticatedUrl('http://127.0.0.1:3080')).toBe(login.launchUrl)
+    const reused = response()
+    const target = new URL(login.launchUrl)
+    expect(restarted.authorizeIndex(
+      request(`${target.pathname}${target.search}`, '127.0.0.1:3080'),
+      reused.value,
+    )).toBe(false)
+    expect(reused.state.status).toBe(303)
+
+    await expect(createAuth(store, 30, {}, SHORT_TOKEN))
+      .rejects.toThrow(/launch token is shorter than 32 characters/u)
+  })
+
+  it('marks the session cookie Secure only for an index request that arrived over HTTPS', async () => {
+    const auth = await createAuth(new RecordCredentials(), 30, {}, SUPPLIED_TOKEN)
+    const authority = 'dsh-cf-web.example.workers.dev'
+    const secure = response()
+    expect(auth.authorizeIndex(
+      request(auth.authenticatedUrl(`https://${authority}`), authority),
+      secure.value,
+    )).toBe(false)
+    expect(secure.state.headers?.['set-cookie']).toMatch(/; HttpOnly; SameSite=Strict; Secure$/u)
+
+    const plain = response()
+    expect(auth.authorizeIndex(
+      request(auth.authenticatedUrl(`http://${authority}`), authority),
+      plain.value,
+    )).toBe(false)
+    expect(plain.state.headers?.['set-cookie']).not.toContain('Secure')
   })
 
   it('fails loud on an invalid owner record instead of replacing it', async () => {

@@ -50,7 +50,7 @@ export function compositionPackages() {
  * @typedef {{ kind: 'not-applicable', reason: string }} NotApplicableDisposition
  * @typedef {{ kind: 'gap', reason: string, capability: string, impact: string, orphans: string[], status: 'open' | 'out-of-scope', tracking: string }} GapDisposition
  * @typedef {ReplacedDisposition | NotApplicableDisposition | GapDisposition} CfDisposition
- * @typedef {{ publicHost: string, publicUrl: string, workspaceRoot: string }} Deployment
+ * @typedef {{ publicHost: string, publicUrl: string, workspaceRoot: string, launchTokenRef: string }} Deployment
  */
 
 /** The Agent Note that owns the CF host plan; the tracking home for gaps it did not close. */

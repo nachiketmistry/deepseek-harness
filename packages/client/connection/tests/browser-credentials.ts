@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
-import type { CredentialProvider, CredentialRecord } from '@deepseek-ai/dsh-credentials'
+import type { CredentialProvider, CredentialRecord, CredentialRef, ResolvedCredential } from '@deepseek-ai/dsh-credentials'
 
 /** Mutable credential-record double for Connection authentication tests. */
 export class RecordCredentials {
@@ -7,6 +7,13 @@ export class RecordCredentials {
   discardWrites = false
   reads = 0
   modifies = 0
+  /** Reference values this store resolves, for the configured launch token. */
+  readonly refs = new Map<string, string>()
+
+  resolve(ref: CredentialRef): Promise<ResolvedCredential | undefined> {
+    const value = this.refs.get(ref)
+    return Promise.resolve(value === undefined ? undefined : { value, source: 'test' })
+  }
 
   readRecord(): Promise<CredentialRecord | undefined> {
     this.reads += 1
@@ -30,7 +37,13 @@ export class RecordCredentials {
   }
 }
 
-/** Provide the record operations Connection needs during authentication setup. */
-export function provideBrowserCredentials(ctx: Context): void {
-  ctx.provide('credentials', new RecordCredentials() as unknown as CredentialProvider)
+/**
+ * Provide the record operations Connection needs during authentication setup.
+ * @param ctx - context the provider is installed on.
+ * @returns the installed store, for a test that seeds a reference value.
+ */
+export function provideBrowserCredentials(ctx: Context): RecordCredentials {
+  const store = new RecordCredentials()
+  ctx.provide('credentials', store as unknown as CredentialProvider)
+  return store
 }

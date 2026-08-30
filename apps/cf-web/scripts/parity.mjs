@@ -80,12 +80,12 @@ for (const [name, disposition] of CF_ROW_DISPOSITIONS) {
 }
 
 // Stale preset skips: the preset directory must still exist and still be an agent composition.
-const presetRoot = join(ROOT, 'apps/cli/config/agent-presets')
+const presetRoot = join(ROOT, 'packages/preset/agent-presets-filesystem/presets')
 for (const id of CF_SKIPPED_PRESETS.keys()) {
   try {
     readFileSync(join(presetRoot, id, 'agent.cordis.yml'), 'utf8')
   } catch {
-    problems.push(`preset \`${id}\` is declared skipped, but apps/cli/config/agent-presets/${id}/agent.cordis.yml does not exist`)
+    problems.push(`preset \`${id}\` is declared skipped, but packages/preset/agent-presets-filesystem/presets/${id}/agent.cordis.yml does not exist`)
   }
 }
 

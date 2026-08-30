@@ -145,7 +145,9 @@ export function hostRows(deployment) {
  * @returns {{ table: Record<string, object>, skipped: string[], ledger: object[] }}
  */
 export function presetComposition(deployment) {
-  const root = join(ROOT, 'apps/cli/config/agent-presets')
+  // The shipped set is the filesystem source's own bundled root; the launcher
+  // no longer patches a directory beside the app.
+  const root = join(ROOT, 'packages/preset/agent-presets-filesystem/presets')
   const table = {}
   const skipped = []
   const ledger = []

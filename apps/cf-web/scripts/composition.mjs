@@ -149,6 +149,11 @@ export const CF_ROW_DISPOSITIONS = new Map([
     reason: 'node_modules resolution of client bundles',
     by: () => [],
     entry: '@deepseek-ai/dsh-client-bundle-source-static',
+    reduced: {
+      '@deepseek-ai/dsh-client-bundle-source-static': [
+        { member: 'watchPath', cost: 'Client bundles are baked into the Worker artifact, so no file exists for a rebuild watcher to poll. Client HMR is inert on this deployment; a new bundle arrives only by redeploying.' },
+      ],
+    },
   }],
   ['@deepseek-ai/dsh-agent-presets-filesystem', {
     kind: 'replaced',

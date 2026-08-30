@@ -8,11 +8,11 @@ What it shows: every row of the web composition the Cloudflare build does not mo
 
 | | web app | Cloudflare |
 |---|---|---|
-| composition rows naming a package | 137 | 122 |
-| distinct packages (host rows and presets) | 136 | 124 |
+| composition rows naming a package | 146 | 131 |
+| distinct packages (host rows and presets) | 145 | 133 |
 | agent presets | 4 | 2 |
 
-5 capability gaps, 2 of them open. 14 host rows are replaced by a Cloudflare provider and 7 do not apply to this deployment. Of the 16 substitute providers, 15 have no test suite and 5 are not like-for-like stand-ins.
+5 capability gaps, 2 of them open. 14 host rows are replaced by a Cloudflare provider and 7 do not apply to this deployment. Of the 16 substitute providers, 15 have no test suite and 6 are not like-for-like stand-ins.
 
 ## Capability gaps
 
@@ -47,7 +47,7 @@ A replacement claims a Cloudflare provider stands in for a Node one. This sectio
 | `dsh-fs-cf-sandbox` | `dsh-fs-sandbox` | **none** | — |
 | `dsh-directory-picker-cf` | `dsh-host-directory-picker-auto` | **none** | — |
 | `dsh-client-ui-directory-picker-browse` | `dsh-host-directory-picker-auto` | 2 | — |
-| `dsh-client-bundle-source-static` | `dsh-client-bundle-source-node` | **none** | — |
+| `dsh-client-bundle-source-static` | `dsh-client-bundle-source-node` | **none** | `watchPath` — Client bundles are baked into the Worker artifact, so no file exists for a rebuild watcher to poll. Client HMR is inert on this deployment; a new bundle arrives only by redeploying. |
 | `dsh-agent-presets-static` | `dsh-agent-presets-filesystem` | **none** | `authorable` — The presets are baked into the host artifact at build time and there is nowhere for a locally authored one to go, so the deployment is read-only for presets: the GUI disables duplicating and editing a preset, and a user cannot add one. |
 | `dsh-web-cf` | `dsh-web-app` | **none** | — |
 
@@ -63,6 +63,7 @@ Every web composition row the Cloudflare build does not mount as written.
 | `dsh-llm-pi-ai` | not applicable | optional provider catalog; not in the CF composition |
 | `dsh-session-persistence-jsonl` | replaced | disk JSONL → `dsh-session-persistence-do` |
 | `dsh-attachment-local` | replaced | disk store → `dsh-attachment-r2` |
+| `dsh-storage-json` | replaced | disk JSON → `dsh-storage-do` |
 | `dsh-session-telemetry-otel` | not applicable | node exporter transport; disabled by default in the web composition |
 | `dsh-subprocess-local` | replaced | node:child_process → `dsh-cf-sandbox`, `dsh-subprocess-cf-sandbox` |
 | `dsh-sandbox-local` | replaced | OS sandbox launchers → `dsh-sandbox-passthrough` |
@@ -76,7 +77,6 @@ Every web composition row the Cloudflare build does not mount as written.
 | `dsh-tool-ralph` | **gap** (workflow) | consumer of the worker-thread workflow engine |
 | `dsh-fs-sandbox` | replaced | local-disk containment provider → `dsh-fs-cf-sandbox` |
 | `dsh-code-runtime-worker-thread` | **gap** (code-mode) | node:worker_threads |
-| `dsh-storage-json` | replaced | disk JSON → `dsh-storage-do` |
 | `dsh-host-directory-picker-auto` | replaced | OS chooser probe → `dsh-directory-picker-cf`, `dsh-client-ui-directory-picker-browse` |
 | `dsh-cordis-host-runner` | **gap** (self-modification) | node:vm |
 | `dsh-web-app/startup` | not applicable | commander flags of the CLI invocation |
@@ -92,7 +92,7 @@ Preset rows are composed per preset, so a row dropped here is a tool or capabili
 
 | preset | rows on web | rows on Cloudflare | dropped |
 |---|---|---|---|
-| `code` | 27 | 22 | `dsh-tool-pwsh` (n/a)<br>`dsh-skill-filesystem` (**gap**)<br>`dsh-workflow-worker-thread` (**gap**)<br>`dsh-tool-workflow` (**gap**)<br>`dsh-tool-ralph` (**gap**) |
-| `standard` | 26 | 21 | `dsh-tool-pwsh` (n/a)<br>`dsh-skill-filesystem` (**gap**)<br>`dsh-workflow-worker-thread` (**gap**)<br>`dsh-tool-workflow` (**gap**)<br>`dsh-tool-ralph` (**gap**) |
+| `ptc` | 28 | 23 | `dsh-tool-pwsh` (n/a)<br>`dsh-skill-filesystem` (**gap**)<br>`dsh-workflow-worker-thread` (**gap**)<br>`dsh-tool-workflow` (**gap**)<br>`dsh-tool-ralph` (**gap**) |
+| `standard` | 27 | 22 | `dsh-tool-pwsh` (n/a)<br>`dsh-skill-filesystem` (**gap**)<br>`dsh-workflow-worker-thread` (**gap**)<br>`dsh-tool-workflow` (**gap**)<br>`dsh-tool-ralph` (**gap**) |
 | `cordis` | — | **not shipped** | mounts `cordis-host-runner` (node:vm) |
 | `minimal` | — | **not shipped** | shadows the filesystem with the bare local-disk provider, which the Worker has no disk for |

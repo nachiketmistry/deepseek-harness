@@ -10,6 +10,7 @@ import {
   type BorrowedSessionSource,
   type SessionInspection,
 } from '@deepseek-ai/dsh-session-persistence'
+import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SessionQueryEngine from '@deepseek-ai/dsh-session-query'
 import { vi } from 'vitest'
@@ -173,6 +174,12 @@ function installControllers(
         await defaults.saveDefaultModelSelection?.(selection)
       },
     } as never)
+  }
+  if (ctx.get('fs') === undefined) {
+    // Creating a Session's project directory goes through the filesystem seam.
+    // These cases run against real temporary directories, so the real local
+    // provider is what keeps that step behaving as it does on a host.
+    void ctx.plugin(LocalFileSystem, {})
   }
   if (ctx.get('llm') === undefined) {
     ctx.provide('llm', {

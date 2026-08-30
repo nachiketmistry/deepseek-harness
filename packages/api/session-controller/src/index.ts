@@ -85,6 +85,7 @@ export class SessionController extends TypertRemoteService {
     'agentDefaultModel',
     'agents',
     'attachments',
+    'fs',
     'llm',
     'sessions',
     'sessionProjections',

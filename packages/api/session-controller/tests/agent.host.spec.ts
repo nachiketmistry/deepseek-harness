@@ -5,6 +5,7 @@ import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { agentPresetProjectionDefinition } from '@deepseek-ai/dsh-agent-presets'
+import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import type { SessionObservation } from '@deepseek-ai/dsh-session-query'
@@ -30,6 +31,10 @@ afterEach(async () => {
 async function harness(): Promise<{ ctx: Context; agents: ApiSessionAgentController }> {
   const ctx = new Context()
   roots.push(ctx)
+  // The real local provider, not a fake: creating a Session's project
+  // directory goes through the filesystem seam, and what these cases assert
+  // about it is host-filesystem behavior.
+  await ctx.plugin(LocalFileSystem, {})
   await ctx.plugin(TypertRegistry)
   await ctx.plugin(SessionStore)
   await ctx.plugin(AgentRegistry)

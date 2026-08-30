@@ -18,6 +18,7 @@
     "parity:check": "node scripts/parity.mjs --check",
     "build": "node scripts/parity.mjs && node scripts/build.mjs",
     "test:workerd": "node scripts/build-probe.mjs && vitest run --config vitest.workerd.config.ts",
+    "test:browser": "vitest run --config vitest.browser.config.ts",
     "deploy": "pnpm run build && wrangler deploy --containers-rollout=immediate",
     "typecheck": "tsc -p tsconfig.json"
   },
@@ -27,6 +28,7 @@
     "@cloudflare/workers-types": "^5.20260821.1",
     "esbuild": "^0.28.2",
     "js-yaml": "^4.2.0",
+    "playwright": "^1.49.0",
     "jose": "^6.2.3",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8",

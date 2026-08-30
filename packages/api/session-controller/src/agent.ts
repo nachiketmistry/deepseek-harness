@@ -1,6 +1,5 @@
 /** Agent activation, composition, and model-selection policy owned by API Session. */
 
-import { mkdir } from 'node:fs/promises'
 import type { Context } from '@deepseek-ai/cordis'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type {
@@ -8,6 +7,7 @@ import type {
 } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-agent-presets'
+import type {} from '@deepseek-ai/dsh-fs'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
 import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
@@ -473,7 +473,10 @@ export class ApiSessionAgentController {
     }
 
     try {
-      await mkdir(cwd, { recursive: true })
+      // Through the filesystem seam, not `node:fs`: the deployment's files may
+      // be anywhere its provider reaches, and on Cloudflare they are in a
+      // sandbox container that no Node call from the Worker can touch.
+      await this.ctx.fs.ensureDirectory(cwd)
     } catch (error: unknown) {
       throw new Error(`failed to ensure project directory "${cwd}": ${String(error)}`, { cause: error })
     }

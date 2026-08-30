@@ -28,6 +28,7 @@
     { "path": "../../core/scope" },
     { "path": "../../core/session" },
     { "path": "../../context/file-reference" },
+    { "path": "../../fs/fs" },
     { "path": "../../attachment/attachment" },
     { "path": "../../interaction/permission-presets" },
     { "path": "../../jobs/jobs" },

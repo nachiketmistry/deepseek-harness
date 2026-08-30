@@ -67,12 +67,20 @@ const identity = ${scriptLiteral(identityBaseUrl)}
 const form = document.getElementById('f')
 const error = document.getElementById('error')
 
-/** Ask the identity service for a token this deployment can verify. */
+/**
+ * Ask the identity service for a token this deployment can verify.
+ * Answering undefined covers an unreachable service as well as a browser
+ * holding no identity session: either way the only way on is the form.
+ */
 async function token() {
-  const response = await fetch(identity + ${scriptLiteral(IDENTITY_ROUTES.token)}, { credentials: 'include' })
-  if (!response.ok) return undefined
-  const body = await response.json()
-  return typeof body.token === 'string' ? body.token : undefined
+  try {
+    const response = await fetch(identity + ${scriptLiteral(IDENTITY_ROUTES.token)}, { credentials: 'include' })
+    if (!response.ok) return undefined
+    const body = await response.json()
+    return typeof body.token === 'string' ? body.token : undefined
+  } catch {
+    return undefined
+  }
 }
 
 /** Exchange a token for this deployment's session cookie, then load the application. */
@@ -87,8 +95,17 @@ async function start(value) {
 }
 
 const existing = await token()
-if (existing !== undefined) await start(existing)
-else form.hidden = false
+if (existing === undefined) form.hidden = false
+else {
+  try {
+    await start(existing)
+  } catch (failure) {
+    // The identity session is live but this deployment refused its token.
+    // Showing the form is the only remaining way in.
+    form.hidden = false
+    error.textContent = failure instanceof Error ? failure.message : String(failure)
+  }
+}
 
 form.addEventListener('submit', async (event) => {
   event.preventDefault()

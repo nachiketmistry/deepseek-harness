@@ -64,6 +64,10 @@ const appPackageFiles: Readonly<Record<string, readonly string[]>> = {
   // The Cloudflare app publishes its prebuilt Worker and the wrangler
   // configuration that deploys it; the sourcemap stays local.
   '@deepseek-ai/dsh-cf-web': ['dist/worker.js', 'wrangler.jsonc'],
+  // The auth app is private and never published; wrangler bundles its Worker
+  // from source at deploy, so the only artifacts worth carrying are the
+  // reviewed schema migration and the configuration that deploys it.
+  '@deepseek-ai/dsh-cf-auth': ['migrations', 'wrangler.jsonc'],
 }
 
 /** The subset of package.json fields this constraint check cares about. */

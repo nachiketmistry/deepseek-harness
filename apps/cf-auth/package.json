@@ -1,0 +1,37 @@
+{
+  "name": "@deepseek-ai/dsh-cf-auth",
+  "description": "The dsh identity service on Cloudflare: Better Auth on a Worker, Neon behind Hyperdrive, issuing the JWTs the harness edge verifies",
+  "version": "0.1.1-rc.1",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+    "directory": "apps/cf-auth"
+  },
+  "type": "module",
+  "scripts": {
+    "schema": "node --import tsx/esm scripts/schema.mjs",
+    "migrate": "node scripts/migrate.mjs",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "better-auth": "^1.7.2",
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260821.1",
+    "@types/pg": "^8.15.5",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8",
+    "wrangler": "^4.125.0",
+    "tsx": "^4.21.1"
+  },
+  "files": [
+    "migrations",
+    "wrangler.jsonc"
+  ]
+}

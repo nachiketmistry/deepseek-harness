@@ -200,6 +200,15 @@ export const CF_ROW_DISPOSITIONS = new Map([
     status: 'open',
     tracking: CF_NOTE,
   }],
+  ['@deepseek-ai/dsh-plugin-package-inventory-deepseek', {
+    kind: 'gap',
+    reason: 'resolves each active plugin package to its own package.json through node:module search paths, which a Worker has no filesystem to answer',
+    capability: 'plugin-package-inventory',
+    impact: 'Official DeepSeek requests carry no `dsh_plugin_packages` field, so the API is told nothing about which plugin packages assembled the request. Mounting it instead fails every model turn, because the field is prepared per request and its resolver throws rather than reporting an incomplete inventory.',
+    orphans: [],
+    status: 'open',
+    tracking: CF_NOTE,
+  }],
   ['@deepseek-ai/dsh-code-runtime-worker-thread', {
     kind: 'gap',
     reason: 'node:worker_threads',

@@ -8,11 +8,11 @@ What it shows: every row of the web composition the Cloudflare build does not mo
 
 | | web app | Cloudflare |
 |---|---|---|
-| composition rows naming a package | 146 | 131 |
-| distinct packages (host rows and presets) | 145 | 133 |
+| composition rows naming a package | 146 | 130 |
+| distinct packages (host rows and presets) | 145 | 132 |
 | agent presets | 4 | 2 |
 
-5 capability gaps, 2 of them open. 14 host rows are replaced by a Cloudflare provider and 7 do not apply to this deployment. Of the 16 substitute providers, 15 have no test suite and 6 are not like-for-like stand-ins.
+6 capability gaps, 3 of them open. 14 host rows are replaced by a Cloudflare provider and 7 do not apply to this deployment. Of the 16 substitute providers, 15 have no test suite and 6 are not like-for-like stand-ins.
 
 ## Capability gaps
 
@@ -21,6 +21,7 @@ A gap is a capability the web app has and this deployment does not. `still mount
 | capability | status | missing | still mounted | what the deployment loses | tracking |
 |---|---|---|---|---|---|
 | **skills** | open | `dsh-skill-filesystem`<br>`dsh-skill-badge` | `dsh-tool-skill` | Every preset mounts `tool-skill` over a `skills` registry with no provider registered into it, so the model is offered a skill loader whose catalog is always empty. The skills that ship with the deployment are unavailable even once a discovery provider exists. | [`2026-08-21-cloudflare-web-host.md`](../../.agents/notes/proposed/architecture/2026-08-21-cloudflare-web-host.md) |
+| **plugin-package-inventory** | open | `dsh-plugin-package-inventory-deepseek` | — | Official DeepSeek requests carry no `dsh_plugin_packages` field, so the API is told nothing about which plugin packages assembled the request. Mounting it instead fails every model turn, because the field is prepared per request and its resolver throws rather than reporting an incomplete inventory. | [`2026-08-21-cloudflare-web-host.md`](../../.agents/notes/proposed/architecture/2026-08-21-cloudflare-web-host.md) |
 | **code-mode** | out of scope | `dsh-code-runtime-worker-thread` | `dsh-agent-tool-presentation` | The `code` preset mounts `tool-presentation`, which waits on `codeRuntime` forever, so the preset whose purpose is Code Mode silently serves native tools instead. | [`2026-08-21-cloudflare-web-host.md`](../../.agents/notes/proposed/architecture/2026-08-21-cloudflare-web-host.md) |
 | **workflow** | out of scope | `dsh-workflow-worker-thread`<br>`dsh-tool-workflow`<br>`dsh-tool-ralph` | `dsh-client-ui-workflow-run` | No workflow engine is mounted, while the host still mounts the workflow run UI. No preset offers the workflow tool. No preset offers the ralph loop tool. | [`2026-08-21-cloudflare-web-host.md`](../../.agents/notes/proposed/architecture/2026-08-21-cloudflare-web-host.md) |
 | **self-modification** | out of scope | `dsh-cordis-host-runner`<br>preset `cordis` | — | The agent cannot mount, inspect, or modify its own plugin tree at runtime. The `cordis` preset cannot ship: it mounts `cordis-host-runner` (node:vm). | [`2026-08-21-cloudflare-web-host.md`](../../.agents/notes/proposed/architecture/2026-08-21-cloudflare-web-host.md) |
@@ -58,6 +59,7 @@ Every web composition row the Cloudflare build does not mount as written.
 | row | disposition | detail |
 |---|---|---|
 | `cordis-plugin-hmr` | not applicable | file watching; disabled on web already |
+| `dsh-plugin-package-inventory-deepseek` | **gap** (plugin-package-inventory) | resolves each active plugin package to its own package.json through node:module search paths, which a Worker has no filesystem to answer |
 | `dsh-settings-file` | replaced | disk YAML + chokidar → `dsh-settings-do` |
 | `dsh-credentials-local` | replaced | disk .env + chokidar → `dsh-credentials-secrets` |
 | `dsh-llm-pi-ai` | not applicable | optional provider catalog; not in the CF composition |

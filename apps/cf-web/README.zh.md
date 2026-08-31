@@ -44,4 +44,4 @@ pnpm --filter @deepseek-ai/dsh-cf-web  run dev    # the GUI on :8790
 
 ## 已知限制与待办
 
-[composition-parity.md](composition-parity.md) 是当前清单，由构建实际组合出的内容生成：本部署不挂载哪些 web 行、每一行由哪个 Cloudflare Provider 顶替，以及因此缺失哪些能力。当前的未决缺口是 skills（没有任何 Provider 注册进 `skills` 注册表，因此每个 preset 的 `tool-skill` 提供的目录始终为空）与 `minimal` preset。另外，报告的 fidelity 一节记录了 16 个替代 Provider 中有 15 个没有任何测试套件：`pnpm run test:coverage` 会拒绝它们的每一个源文件，因此"已替换"意味着已挂载、已打包，而非已被验证。工作流引擎、Code Mode 的 worker-thread 运行时以及 `dsh-cordis-host-runner` 依赖 `node:worker_threads` 或 `node:vm`，按决策留在 CF 组合之外，而非疏漏。
+[composition-parity.md](composition-parity.md) 是当前清单，由构建实际组合出的内容生成：本部署不挂载哪些 web 行、每一行由哪个 Cloudflare Provider 顶替，以及因此缺失哪些能力。当前的未决缺口是 skills（没有任何 Provider 注册进 `skills` 注册表，因此每个 preset 的 `tool-skill` 提供的目录始终为空）、`minimal` preset，以及插件包清单（官方请求不携带 `dsh_plugin_packages`，因为解析它需要这些包在磁盘上）。另外，报告的 fidelity 一节记录了 16 个替代 Provider 中有 15 个没有任何测试套件：`pnpm run test:coverage` 会拒绝它们的每一个源文件，因此"已替换"意味着已挂载、已打包，而非已被验证。工作流引擎、Code Mode 的 worker-thread 运行时以及 `dsh-cordis-host-runner` 依赖 `node:worker_threads` 或 `node:vm`，按决策留在 CF 组合之外，而非疏漏。

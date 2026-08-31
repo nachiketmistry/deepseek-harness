@@ -106,7 +106,11 @@ export namespace ModuleLoader {
   let _cachedLoader: ModuleLoader | undefined
 
   function requireInternal(id: string): any {
-    const require = createRequire(import.meta.url)
+    // A host without module URLs (a Workers isolate) has no Node internals to
+    // locate; the host installs its own `internal` after construction.
+    const moduleUrl: string | undefined = import.meta.url
+    if (moduleUrl === undefined) return undefined
+    const require = createRequire(moduleUrl)
     if (process.execArgv.includes('--expose-internals')) {
       try {
         return require(id)

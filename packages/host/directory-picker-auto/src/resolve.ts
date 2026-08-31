@@ -6,8 +6,6 @@
  * @module @deepseek-ai/dsh-host-directory-picker-auto/resolve
  */
 
-import type { Config as HttpServerConfig } from '@deepseek-ai/dsh-host-webserver'
-
 /** Concrete interaction backend the resolver chooses between. */
 export type DirectoryPickerBackendKind = 'native' | 'browse'
 
@@ -18,8 +16,8 @@ export type DirectoryPickerEnv = Readonly<
 
 /** Host facts the backend choice is a pure function of, sampled once at boot. */
 export interface DirectoryPickerHostFacts {
-  /** Effective webserver bind host (the schema's closed loopback/all-interfaces union). */
-  bindHost: HttpServerConfig['host']
+  /** The carrier's bound host literal; a native chooser is offered only behind loopback. */
+  bindHost: string
   /** Host process platform. */
   platform: NodeJS.Platform
   /** Environment sample; SSH marks a remote operator, DISPLAY/WAYLAND_DISPLAY a Linux display. */

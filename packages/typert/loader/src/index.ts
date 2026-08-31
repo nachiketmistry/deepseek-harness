@@ -11,9 +11,9 @@
  * fails loud — aggregated into this plugin's activation throw for existing
  * entries, contained to a logged error per package in steady state.
  *
- * Scanning is incremental per entry name, mirroring the client-modules node
- * half: every cordis `internal/plugin` emission marks the fiber's entry name
- * dirty and a microtask flush reconciles each dirty name against the live
+ * Scanning is incremental per entry name. Every cordis `internal/plugin`
+ * emission marks the fiber's entry name dirty, and a microtask flush
+ * reconciles each dirty name against the live
  * loader entries; the activation pass seeds the same dirty set with all
  * current entries. Package verdicts and imported manifests are cached per
  * package name and never expire — plugin-set changes take effect on restart.
@@ -29,7 +29,7 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import type { Context } from '@deepseek-ai/cordis'
+import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-typert-registry'
@@ -37,6 +37,32 @@ import type { TypertContribution } from '@deepseek-ai/dsh-typert-registry/types'
 
 /** The package.json exports key naming a package's host-face typert artifact. */
 export const TYPERT_HOST_EXPORT = './typert'
+
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    typertArtifacts: TypertArtifactSource
+  }
+}
+
+/**
+ * Where a package's typert artifact comes from. Absent, the loader resolves
+ * each package's `./typert` export from `ctx.baseUrl` through Node resolution;
+ * a host whose artifact already carries every contribution (a platform
+ * Worker) mounts a table-backed source instead.
+ */
+export abstract class TypertArtifactSource extends Service {
+  constructor(ctx: Context) {
+    super(ctx, 'typertArtifacts')
+  }
+
+  /**
+   * Load one package's artifact module.
+   * @param packageName - the row's package name.
+   * @returns the artifact module namespace (its `TYPERT` export is validated
+   * by the loader), or `undefined` when the package contributes no types.
+   */
+  abstract load(packageName: string): Promise<Record<string, unknown> | undefined>
+}
 
 /** Cordis plugin name. */
 export const name = 'typert-loader'
@@ -276,42 +302,19 @@ function requireStrictCodec(pkgName: string, value: unknown, subject: string): v
 }
 
 /**
- * Scan current Loader entries during activation, then follow entry mounts and
- * unmounts for this plugin's lifetime.
- * @param ctx - plugin context carrying `typert` and `loader`.
- * @param config - explicit package artifacts in addition to Loader entries.
+ * The Node artifact source: resolve each package's `./typert` export from the
+ * config tree's baseUrl (the cordis.yml directory, whose package declares
+ * every composed plugin as a dependency; this package's own URL would miss
+ * sibling packages under pnpm's isolated node_modules). Negative verdicts
+ * (unresolvable specifier — loader builtins, subpath rows — or no typert
+ * export) are cached and never expire: plugin-set changes take effect on restart.
  */
-export async function apply(ctx: Context, config: Config): Promise<void> {
-  // Resolution anchor: the config tree's baseUrl (the cordis.yml directory,
-  // whose package declares every composed plugin as a dependency). This
-  // package's own URL would miss sibling packages under pnpm's isolated
-  // node_modules.
+function nodeArtifactSource(ctx: Context, configured: ReadonlySet<string>): Pick<TypertArtifactSource, 'load'> {
   if (ctx.baseUrl === undefined) {
     throw new Error('typert-loader: ctx.baseUrl is unset — the loader needs the config-tree anchor to resolve plugin packages')
   }
   const require = createRequire(ctx.baseUrl)
-  const configured = new Set((config as ResolvedConfig).packages)
-
-  // Registered contributions by entry name; the disposer withdraws the entry's registration.
-  const registered = new Map<string, () => Promise<void>>()
-  // In-flight import/register tasks by entry name.
-  const pending = new Map<string, Promise<void>>()
-  // Artifact paths by package name. Negative verdicts (unresolvable specifier —
-  // loader builtins, subpath rows — or no typert export) are cached as null and
-  // never expire: plugin-set changes take effect on restart.
   const artifactPath = new Map<string, string | null>()
-  // Imported+validated manifests by package name (one import per package per process).
-  const manifests = new Map<string, Promise<TypertContribution>>()
-  const dirty = new Set<string>()
-  let flushQueued = false
-  let active = true
-  ctx.effect(function* () {
-    yield () => {
-      active = false
-      dirty.clear()
-    }
-  }, 'typert loader lifetime')
-
   const resolveArtifact = (pkgName: string): string | null => {
     const cached = artifactPath.get(pkgName)
     if (cached !== undefined) return cached
@@ -325,8 +328,6 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           { cause },
         )
       }
-      // Not a resolvable package root: loader builtins (cordis:include) and
-      // subpath entries land here — permanently not a typert contributor.
       artifactPath.set(pkgName, null)
       return null
     }
@@ -339,18 +340,56 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     artifactPath.set(pkgName, resolved)
     return resolved
   }
-
-  const loadManifest = (pkgName: string, path: string): Promise<TypertContribution> => {
-    let loading = manifests.get(pkgName)
-    if (loading === undefined) {
-      loading = import(pathToFileURL(path).href).then(
-        (mod: Record<string, unknown>) => validateTypertManifest(pkgName, mod.TYPERT),
+  return {
+    load(pkgName) {
+      const path = resolveArtifact(pkgName)
+      if (path === null) return Promise.resolve(undefined)
+      return import(pathToFileURL(path).href).then(
+        (mod: Record<string, unknown>) => mod,
         (cause: unknown) => {
           throw new Error(
             `typert-loader: ${pkgName} exports "${TYPERT_HOST_EXPORT}" but importing ${path} failed: ${String(cause)}`,
           )
         },
       )
+    },
+  }
+}
+
+/**
+ * Scan current Loader entries during activation, then follow entry mounts and
+ * unmounts for this plugin's lifetime.
+ * @param ctx - plugin context carrying `typert` and `loader`.
+ * @param config - explicit package artifacts in addition to Loader entries.
+ */
+export async function apply(ctx: Context, config: Config): Promise<void> {
+  // Resolution anchor: the config tree's baseUrl (the cordis.yml directory,
+  // whose package declares every composed plugin as a dependency). This
+  // package's own URL would miss sibling packages under pnpm's isolated
+  // node_modules.
+  const configured = new Set((config as ResolvedConfig).packages)
+  const source = ctx.get('typertArtifacts') ?? nodeArtifactSource(ctx, configured)
+
+  // Registered contributions by entry name; the disposer withdraws the entry's registration.
+  const registered = new Map<string, () => Promise<void>>()
+  // In-flight import/register tasks by entry name.
+  const pending = new Map<string, Promise<void>>()
+  const manifests = new Map<string, Promise<TypertContribution | undefined>>()
+  const dirty = new Set<string>()
+  let flushQueued = false
+  let active = true
+  ctx.effect(function* () {
+    yield () => {
+      active = false
+      dirty.clear()
+    }
+  }, 'typert loader lifetime')
+
+  // Imported+validated manifests by package name (one load per package per process).
+  const loadManifest = (pkgName: string): Promise<TypertContribution | undefined> => {
+    let loading = manifests.get(pkgName)
+    if (loading === undefined) {
+      loading = source.load(pkgName).then(mod => (mod === undefined ? undefined : validateTypertManifest(pkgName, mod.TYPERT)))
       manifests.set(pkgName, loading)
     }
     return loading
@@ -375,11 +414,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       return undefined
     }
     if (registered.has(entryName) || pending.has(entryName)) return undefined
-    const path = resolveArtifact(entryName)
-    if (path === null) return undefined
-    const task = loadManifest(entryName, path).then((manifest) => {
+    const task = loadManifest(entryName).then((manifest) => {
       // The entry may have unmounted (or already re-registered) while the import was in flight.
-      if (!active || !qualifies(entryName) || registered.has(entryName)) return
+      if (manifest === undefined || !active || !qualifies(entryName) || registered.has(entryName)) return
       registered.set(entryName, ctx.typert.register(manifest))
     })
     pending.set(entryName, task)

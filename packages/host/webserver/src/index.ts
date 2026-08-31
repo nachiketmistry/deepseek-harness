@@ -1,19 +1,17 @@
 /**
- * @deepseek-ai/dsh-host-webserver — Web route-registration plugin: a node:http
- * server plus the `webServer` service (HTTP and upgrade route registries, the
+ * @deepseek-ai/dsh-host-webserver — the web carrier Service Definition: the
+ * `webServer` service with the HTTP route registry dispatched as one Fetch
+ * handler (`Request` in, `Response` out), the WebSocket route registry, the
  * structured index injection table with raw transform taps behind it, and the
- * single fallback seat for everything no route claims). Knows no harness concepts and serves no files; the composing
- * application's frontend plugin owns dist serving through the fallback hook.
- * Web shape only — Electron loads dist over file:// and carries fetch over an
- * IPC bridge. This package never prints: the URL line belongs to the shell.
+ * single fallback seat for everything no route claims. A Service Provider
+ * subclasses {@link WebServer} and owns the listener: the Node provider
+ * (`@deepseek-ai/dsh-host-webserver-node`) binds `node:http`; a platform
+ * provider forwards its fetch entry. Knows no harness concepts and serves no
+ * files; the composing application's frontend plugin owns dist serving through
+ * the fallback hook. This package never prints: the URL line belongs to the shell.
  */
 
-import { createServer } from 'node:http'
-import type { IncomingMessage, ServerResponse, Server } from 'node:http'
-import type { AddressInfo } from 'node:net'
-import type { Duplex } from 'node:stream'
 import { Context, Service } from '@deepseek-ai/cordis'
-import z from '@deepseek-ai/schemastery'
 import { renderIndexInjections, type IndexInjection } from './injections.ts'
 
 export { renderIndexInjections } from './injections.ts'
@@ -38,66 +36,113 @@ declare module '@deepseek-ai/cordis' {
 /** Route match kind: 'exact' matches the pathname verbatim; 'prefix' p matches p and p/<anything>. */
 export type WebRouteKind = 'exact' | 'prefix'
 
+/**
+ * A Fetch-standard request handler. The request URL carries the authority the
+ * client addressed (its `Host`), so trust fences read it from either the URL or
+ * the headers; `request.signal` aborts when the client goes away, which is
+ * how a streaming response (SSE) learns to stop.
+ */
+export type WebRequestHandler = (request: Request) => Response | Promise<Response>
+
 /** One named route registration. */
 export interface WebRoute {
   kind: WebRouteKind
   /** Absolute pathname, no trailing slash. */
   path: string
-  /** Owns the full response lifecycle (may hold the response open, e.g. SSE). */
-  handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>
+  /** Produces the complete or streaming response. */
+  handler: WebRequestHandler
 }
 
-/** One exact-path HTTP upgrade registration. */
-export interface WebUpgradeRoute {
+/**
+ * The server side of one accepted WebSocket, the subset of the WHATWG
+ * `WebSocket` interface every provider can offer: Node's `ws` socket and a
+ * platform server socket both satisfy it structurally. `readyState` uses the
+ * standard numeric states (`1` is open).
+ */
+export interface WebServerSocket {
+  /** Standard numeric ready state; {@link WEBSOCKET_OPEN} while frames can be sent. */
+  readonly readyState: number
+  /**
+   * Queue one frame.
+   * @param data - text or binary payload.
+   */
+  send(data: string | ArrayBuffer | ArrayBufferView): void
+  /**
+   * Start the closing handshake.
+   * @param code - close code.
+   * @param reason - close reason.
+   */
+  close(code?: number, reason?: string): void
+  /**
+   * Send one Ping control frame, where the provider's protocol has them. A
+   * provider whose platform owns keepalive itself omits this member, and a
+   * caller treats its absence as "the transport already does this".
+   */
+  ping?(): void
+  /**
+   * Subscribe to a socket event.
+   * @param type - `message` (a client frame), `close`, or `error`.
+   * @param listener - receives the platform event; `message` events carry `data`.
+   */
+  addEventListener(type: 'message', listener: (event: { data: unknown }) => void): void
+  addEventListener(type: 'close' | 'error', listener: () => void): void
+}
+
+/** `WebSocket.OPEN`. */
+export const WEBSOCKET_OPEN = 1
+
+/** One exact-path WebSocket route registration. */
+export interface WebSocketRoute {
   /** Absolute pathname, no trailing slash. */
   path: string
-  /** Owns protocol negotiation and the upgraded socket after dispatch. */
-  handler: (req: IncomingMessage, socket: Duplex, head: Buffer) => void | Promise<void>
+  /**
+   * Decide before the handshake. A returned response refuses the upgrade and
+   * is delivered as the plain HTTP answer; `undefined` accepts it.
+   * @param request - the upgrade request.
+   */
+  authorize?: (request: Request) => Response | undefined
+  /**
+   * Drive one accepted socket until it closes. A provider that recovers
+   * sockets after its own restart (hibernation) calls this again with the
+   * recovered socket and the request it was accepted for.
+   * @param request - the upgrade request.
+   * @param socket - the accepted server-side socket.
+   */
+  open: (request: Request, socket: WebServerSocket) => void | Promise<void>
 }
 
-/** Gateway config: the listen address. */
-export interface Config {
-  /** Listen host; the two supported values are loopback and all-interfaces. */
-  host: '127.0.0.1' | '0.0.0.0'
-  /** Listen port; zero requests an OS-assigned port. */
+/** The listening address of a provider that owns its own listener. */
+export interface WebServerAddress {
+  /** Bound host literal. */
+  host: string
+  /** Bound port (the OS-assigned value when the provider was configured with 0). */
   port: number
 }
 
 /**
- * The browser HTTP carrier service. Activation listens immediately. Route
- * registration order does not affect requests because configured named routes
- * must be distinct, and the fallback handler answers anything not yet claimed
- * during startup with 404 until its owner registers. A listen failure rejects
- * initialization, and the boot process reports the failed fiber.
+ * The web carrier: route registries plus their dispatch. Route registration
+ * order does not affect requests because configured named routes must be
+ * distinct, and the fallback handler answers anything not yet claimed during
+ * startup with 404 until its owner registers. A provider activates the
+ * carrier (binds, or attaches to a platform entry) and forwards every request
+ * to {@link fetch}; its initialization failure rejects the fiber.
  */
-export class WebServer extends Service {
-  static Config: z<Config> = z.object({
-    host: z.union([z.const('127.0.0.1'), z.const('0.0.0.0')]).required(),
-    port: z.natural().max(65535).required(),
-  })
-
+export abstract class WebServer extends Service {
   private readonly exact = new Map<string, WebRoute>()
   private readonly prefixes = new Map<string, WebRoute>()
-  private readonly upgrades = new Map<string, WebUpgradeRoute>()
-  private readonly upgradedSockets = new Set<Duplex>()
+  private readonly sockets = new Map<string, WebSocketRoute>()
   private readonly indexTaps: ((html: string) => string)[] = []
-  private fallback: WebRoute['handler'] | undefined
-  private server!: Server
-  private listenedPort!: number
+  private fallback: WebRequestHandler | undefined
 
-  constructor(ctx: Context, private config: Config) {
+  constructor(ctx: Context) {
     super(ctx, 'webServer')
   }
 
-  /** The listening port (the OS-assigned value when config.port is 0). */
-  get port(): number {
-    return this.listenedPort
-  }
-
-  /** The configured bind host (the loopback or all-interfaces literal). */
-  get host(): Config['host'] {
-    return this.config.host
-  }
+  /**
+   * The listening address, or `undefined` for a provider driven by a platform
+   * fetch entry, which has no listener of its own.
+   */
+  abstract get address(): WebServerAddress | undefined
 
   /**
    * Register a named route. Duplicate (kind, path) throws — route patterns are
@@ -115,17 +160,17 @@ export class WebServer extends Service {
   }
 
   /**
-   * Register an exact-path HTTP upgrade route. Duplicate paths throw because
+   * Register an exact-path WebSocket route. Duplicate paths throw because
    * one socket can have only one protocol owner.
-   * @param route - pathname and handler owning negotiation plus socket use.
+   * @param route - pathname, the pre-handshake decision, and the socket owner.
    * @returns the disposer removing the route.
    */
-  registerUpgrade(route: WebUpgradeRoute): () => void {
-    if (this.upgrades.has(route.path)) {
+  registerUpgrade(route: WebSocketRoute): () => void {
+    if (this.sockets.has(route.path)) {
       throw new Error(`webserver: duplicate upgrade route "${route.path}"`)
     }
-    this.upgrades.set(route.path, route)
-    return () => { this.upgrades.delete(route.path) }
+    this.sockets.set(route.path, route)
+    return () => { this.sockets.delete(route.path) }
   }
 
   /**
@@ -133,10 +178,10 @@ export class WebServer extends Service {
    * route matches (the SPA dist server in the shipped Web composition). One
    * owner only — a second registration throws, because two fallbacks cannot
    * compose.
-   * @param handler - owns the full response lifecycle of unmatched requests.
+   * @param handler - produces the response for unmatched requests.
    * @returns the disposer releasing the seat.
    */
-  registerFallback(handler: WebRoute['handler']): () => void {
+  registerFallback(handler: WebRequestHandler): () => void {
     if (this.fallback !== undefined) {
       throw new Error('webserver: fallback already registered')
     }
@@ -159,98 +204,29 @@ export class WebServer extends Service {
     }
   }
 
-  /** Listen; resolves once the socket is bound (rejection = FAILED fiber). */
-  async [Service.init](): Promise<void> {
-    const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-      /* v8 ignore next -- `?? '/'` arm: node:http always sets url on server
-      requests; the field is only optional on the client-side IncomingMessage type */
-      const rawPath = new URL(req.url ?? '/', 'http://x').pathname
-      const route = this.match(rawPath)
-      if (route !== undefined) {
-        await route.handler(req, res)
-        return
-      }
-      const fallback = this.fallback
-      if (fallback === undefined) {
-        res.writeHead(404)
-        res.end()
-        return
-      }
-      await fallback(req, res)
-    }
-    // Last-resort guard: handle() rejecting would otherwise be an unhandled
-    // rejection killing the process on one malformed request (bad %-escape,
-    // client dropping mid-body). Per-request failures log and answer 400 —
-    // never a process exit.
-    this.server = createServer((req, res) => {
-      handle(req, res).catch((err: unknown) => {
-        this.ctx.logger.warn(err instanceof Error ? err : new Error(String(err)))
-        if (res.headersSent) {
-          res.destroy()
-          return
-        }
-        res.writeHead(400)
-        res.end()
-      })
-    })
-    this.server.on('upgrade', (req, socket, head) => {
-      const onError = (error: Error): void => {
-        this.ctx.logger.warn(error)
-        socket.destroy()
-      }
-      socket.on('error', onError)
-      socket.once('close', () => {
-        socket.off('error', onError)
-        this.upgradedSockets.delete(socket)
-      })
-      let route: WebUpgradeRoute | undefined
-      try {
-        /* v8 ignore next -- node:http always sets url on server requests. */
-        route = this.upgrades.get(new URL(req.url ?? '/', 'http://x').pathname)
-      } catch (error) {
-        this.ctx.logger.warn(error instanceof Error ? error : new Error(String(error)))
-        socket.destroy()
-        return
-      }
-      if (route === undefined) {
-        socket.destroy()
-        return
-      }
-      this.upgradedSockets.add(socket)
-      try {
-        Promise.resolve(route.handler(req, socket, head)).catch((error: unknown) => {
-          this.ctx.logger.warn(error instanceof Error ? error : new Error(String(error)))
-          socket.destroy()
-        })
-      } catch (error) {
-        this.ctx.logger.warn(error instanceof Error ? error : new Error(String(error)))
-        socket.destroy()
-      }
-    })
+  /**
+   * Dispatch one HTTP request: the exact table, then longest-prefix over the
+   * prefix table, then the fallback seat, then 404. A handler's rejection
+   * propagates to the provider, which answers it as a per-request failure.
+   * @param request - the request as the provider received it.
+   * @returns the matched handler's response.
+   */
+  async fetch(request: Request): Promise<Response> {
+    const pathname = new URL(request.url).pathname
+    const route = this.match(pathname)
+    if (route !== undefined) return await route.handler(request)
+    const fallback = this.fallback
+    if (fallback === undefined) return new Response(null, { status: 404 })
+    return await fallback(request)
+  }
 
-    await new Promise<void>((resolve, reject) => {
-      this.server.once('error', reject)
-      this.server.listen(this.config.port, this.config.host, () => {
-        this.server.off('error', reject)
-        this.server.on('error', (err) => { this.ctx.logger.error(err) })
-        this.listenedPort = (this.server.address() as AddressInfo).port
-        resolve()
-      })
-    })
-
-    // Node does not include upgraded sockets in closeAllConnections(). The service
-    // owns them with the other connections, so it tracks and destroys them explicitly.
-    this.ctx.effect(() => async () => {
-      const serverClosed = new Promise<void>((resolve) => {
-        this.server.close(() => { resolve() })
-      })
-      this.server.closeAllConnections()
-      const upgradedClosed = [...this.upgradedSockets].map(socket => new Promise<void>((resolve) => {
-        socket.once('close', () => { resolve() })
-        socket.destroy()
-      }))
-      await Promise.all([serverClosed, ...upgradedClosed])
-    }, 'webServer.listen')
+  /**
+   * The WebSocket route owning a pathname, for the provider's handshake.
+   * @param pathname - decoded request pathname.
+   * @returns the route, or undefined when no owner is registered.
+   */
+  upgradeRoute(pathname: string): WebSocketRoute | undefined {
+    return this.sockets.get(pathname)
   }
 
   /** Longest-prefix-wins over the prefix table after an exact-table miss. */

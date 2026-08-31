@@ -1,0 +1,45 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "dsh-cf-web",
+  // Prebuilt by scripts/build.mjs: workspace packages resolve to their built
+  // lib/ through a resolver wrangler's bundler cannot express.
+  "main": "dist/worker.js",
+  "no_bundle": true,
+  "compatibility_date": "2026-08-20",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "observability": { "enabled": true },
+  "assets": { "directory": "dist/assets", "binding": "ASSETS", "run_worker_first": true },
+  "durable_objects": {
+    "bindings": [
+      { "name": "HOST", "class_name": "HostObject" },
+      { "name": "SANDBOX", "class_name": "Sandbox" }
+    ]
+  },
+  // Storage units are versioned and reject an older stored format, so a schema
+  // bump in a composed plugin is cleared by destroying the namespace and
+  // letting the next boot stamp the current versions. v2 ran against a deploy
+  // that carried no HostObject class, which is what a delete migration
+  // requires; v3 recreates it empty.
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["HostObject", "Sandbox"] },
+    { "tag": "v2", "deleted_classes": ["HostObject"] },
+    { "tag": "v3", "new_sqlite_classes": ["HostObject"] }
+  ],
+  "containers": [
+    { "class_name": "Sandbox", "image": "./Dockerfile", "max_instances": 1, "instance_type": "standard" }
+  ],
+  // The identity service this deployment verifies against. The Worker refuses
+  // every request that carries no token this key set accepts, before it
+  // addresses any object, so a deployment naming the wrong service serves
+  // nobody rather than serving everybody one object.
+  "vars": {
+    "AUTH_BASE_URL": "https://dsh-cf-auth.shytiger.workers.dev",
+    "AUTH_JWKS_URL": "https://dsh-cf-auth.shytiger.workers.dev/api/auth/jwks",
+    "AUTH_ISSUER": "https://dsh-cf-auth.shytiger.workers.dev"
+  },
+  "r2_buckets": [
+    { "binding": "ATTACHMENTS", "bucket_name": "dsh-cf-web-attachments" },
+    { "binding": "SPILL", "bucket_name": "dsh-cf-web-spill" }
+  ]
+}

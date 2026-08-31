@@ -221,7 +221,7 @@ export class DeepSeekSearchProvider implements WebSearchProvider {
     try {
       response = await fetch(endpoint, {
         method: 'POST',
-        redirect: 'error',
+        redirect: 'manual',
         headers: {
           // Official DeepSeek expects `x-api-key`; an Anthropic-compatible proxy
           // may expect `Authorization: Bearer` — send both so either resolves.

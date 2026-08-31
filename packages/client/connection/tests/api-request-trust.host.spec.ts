@@ -1,10 +1,12 @@
 /** Behavior of the /api browser-trust fence (rebinding + cross-site defense). */
 
 import { describe, expect, it } from 'vitest'
-import { assertTrustedAuthority, isTrustedApiRequest } from '../src/api-request-trust.ts'
+import { assertTrustedAuthority, forbidden, isTrustedApiRequest } from '../src/api-request-trust.ts'
 
-function request(headers: Record<string, string | undefined>): { headers: Record<string, string | undefined> } {
-  return { headers }
+/** The fence's input: WHATWG `Headers` built from the present entries only. */
+function request(headers: Record<string, string | undefined>): { headers: Headers } {
+  const present = Object.entries(headers).filter((entry): entry is [string, string] => entry[1] !== undefined)
+  return { headers: new Headers(present) }
 }
 
 describe('isTrustedApiRequest', () => {
@@ -68,6 +70,13 @@ describe('isTrustedApiRequest', () => {
     expect(isTrustedApiRequest(request({ host: 'localhost:3080', 'sec-fetch-site': 'same-origin' }), [])).toBe(true)
   })
 
+  it('reads Fetch Headers while preserving absent browser markers', () => {
+    expect(isTrustedApiRequest({ headers: new Headers({ host: '127.0.0.1:3080' }) }, [])).toBe(true)
+    expect(isTrustedApiRequest({
+      headers: new Headers({ host: '127.0.0.1:3080', origin: 'http://evil.example' }),
+    }, [])).toBe(false)
+  })
+
   it('assertTrustedAuthority accepts bare authorities and throws on anything more', () => {
     for (const entry of ['harness.internal', 'harness.internal:3080', 'HARNESS.internal:80', '10.0.0.9', '[::1]:3080']) {
       expect(() => { assertTrustedAuthority(entry) }).not.toThrow()
@@ -104,5 +113,16 @@ describe('isTrustedApiRequest', () => {
     expect(isTrustedApiRequest(request({ ...markers, host: 'bad host' }), [])).toBe(false)
     expect(isTrustedApiRequest(request({ ...markers, host: '127.0.0.999' }), [])).toBe(false)
     expect(isTrustedApiRequest(request({ ...markers, host: '128.0.0.1' }), [])).toBe(false)
+  })
+})
+
+describe('forbidden', () => {
+  it('answers 403 with a fresh plain-text body on every call', async () => {
+    const first = forbidden()
+    const second = forbidden()
+    expect(first).not.toBe(second)
+    expect(first.status).toBe(403)
+    await expect(first.text()).resolves.toBe('forbidden')
+    await expect(second.text()).resolves.toBe('forbidden')
   })
 })

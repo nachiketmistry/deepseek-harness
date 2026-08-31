@@ -343,6 +343,22 @@ export class E2BFileSystem extends FileSystem {
     }
   }
 
+  override async ensureDirectory(path: string, opts?: { cwd?: string; signal?: AbortSignal }): Promise<FsTarget> {
+    assertNotAborted(opts?.signal, 'ensureDirectory')
+    const displayPath = posix.resolve(opts?.cwd ?? this.ctx.e2b.cwd, path)
+    try {
+      const sandbox = await this.ctx.e2b.getSandbox()
+      // makeDir reports false for an existing directory and throws for an existing file.
+      await sandbox.files.makeDir(displayPath, signalOpts(opts?.signal))
+    } catch (error: unknown) {
+      throw mapError(error, 'ensureDirectory', displayPath, opts?.signal)
+    }
+    const target = await this.resolve(displayPath, opts)
+    const info = await this.stat(target, opts?.signal)
+    if (info?.type !== 'directory') throw new FsError(`${displayPath} exists and is not a directory`, 'FS_NOT_FOUND')
+    return target
+  }
+
   override async listDir(target: FsTarget, signal?: AbortSignal): Promise<FsDirEntry[]> {
     const info = await this.stat(target, signal)
     if (info === undefined) throw new FsError(`cannot list "${target.displayPath}": not found`, 'FS_NOT_FOUND')

@@ -12,7 +12,6 @@
  * @module @deepseek-ai/dsh-session-telemetry-otel
  */
 
-import { createRequire } from 'node:module'
 import z from '@deepseek-ai/schemastery'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-command-feedback'
@@ -35,10 +34,11 @@ import { OTLPLogExporter } from '@opentelemetry/exporter-logs-otlp-http'
 import type { OTLPExporterNodeConfigBase } from '@opentelemetry/otlp-exporter-base'
 import { SeverityNumber, type AnyValue, type Logger } from '@opentelemetry/api-logs'
 import { resourceFromAttributes } from '@opentelemetry/resources'
+import packageJson from '@deepseek-ai/dsh-session-telemetry-otel/package.json' with { type: 'json' }
 
 // The package's own manifest is the single source of the instrumentation-scope
 // version (same pattern as dsh-llm's attribution identity).
-const { version } = createRequire(import.meta.url)('../package.json') as { version: string }
+const { version } = packageJson as { version: string }
 
 /** Session-sharing policy selected by {@link Config.mode}. */
 export enum SessionTelemetryMode {

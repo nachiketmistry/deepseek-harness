@@ -61,9 +61,9 @@ interface AgentHandle {
 源码：[`packages/core/agent/src/types.ts`](../../packages/core/agent/src/types.ts)
 
 ```ts type-equiv
-/** Public live-agent handle. */
+/** Public live-agent handle; the runtime face augments its live capabilities. */
 interface Agent {
-  /** The single identity shared with {@link session}. */
+  /** Session-backed Agent identity. */
   readonly id: SessionId
   /** The provider route and model this agent's requests use. */
   readonly options: AgentOptions
@@ -165,12 +165,14 @@ interface AgentOptions {
   provider?: string
   /** Model id interpreted by the selected provider adapter. */
   model?: string
+  /** Adapter-owned reasoning effort for the selected provider/model route. */
+  reasoningEffort?: ReasoningEffortId
   /** Maximum output tokens for each conversation-model request. */
   maxTokens?: number
 }
 ```
 
-在 `agent/request` 之后，分发要求 `provider` 与 `model` 都存在。提供 `maxTokens` 时，它必须是正安全整数，并限制每次对话模型请求的输出；省略时，系统会在写入请求 header 前填入确切模型的适配器默认值，否则提供方行为保持不变。agent 作用域的 `deployment:persona` 提示词段落可以遮蔽全局默认 persona。
+在 `agent/request` 之后，分发要求 `provider` 与 `model` 都存在。显式 `reasoningEffort` 会为该路由的首次请求提供初始值；确切模型解析会校验该值，省略时则允许填入适配器默认值。提供 `maxTokens` 时，它必须是正安全整数，并限制每次对话模型请求的输出；省略时，系统会在写入请求 header 前填入确切模型的适配器默认值，否则提供方行为保持不变。agent 作用域的 `deployment:persona` 提示词段落可以遮蔽全局默认 persona。
 
 inbox 即投递词汇——agent 以持久投影形式拥有的两条有序待处理消息列表：
 
@@ -204,7 +206,7 @@ type AgentCancelCause =
   | { readonly kind: 'disposed' }
 ```
 
-cause 是由 TypeScript 强制约束的同进程输入。活跃的取消持有者会将它复制到仅运行时的 `AbortSignal.reason`；signal 不授予协作监听器任何分类权限。持久 `turn/end` 保留粗粒度 `{ kind: 'aborted' }` 结果；若需记录谁请求了取消，应使用单独的持久事件，而不是让终态结果承担额外含义。
+cause 是由 TypeScript 强制约束的同进程输入。活跃的取消持有者会将它复制到仅运行时的 `AbortSignal.reason`；signal 不授予协作监听器任何分类权限。持久 `turn/end` 以 `{ kind: 'aborted', reason: TurnEndCancelCause }` 记录结果，取消原因随终态结果一起持久化。
 
 [事件分类](../architecture.zh.md#events)负责 `agent/*` 生命周期、检查点与 waterfall（瀑布式事件）约定。轮次和步骤边界是持久会话事件，而不是 agent emit。
 
@@ -230,7 +232,12 @@ pre-step 决策使用与持久 user-role 输入相同、带标识的 `UserMessag
 /** Whether and with which messages the loop enters a proposed step. */
 type PreStepDecision =
   | { kind: 'reject' }
-  | { kind: 'enter'; messages: UserMessage[] }
+  | {
+    kind: 'enter'
+    messages: UserMessage[]
+    /** Start a distinct model-message series before this step's admitted messages. */
+    startsRequestSeries?: true
+  }
 ```
 
 `agent/request-error` 在失败的模型步骤关闭之后、其轮次关闭之前运行。listener 可以在失败轮次的 signal 仍然存活时修复持久状态或 await 策略工作。处理该错误的 listener 返回 `{ kind: 'retry' }` 且不调用 `next()`；默认的 `undefined` 会让失败保持终态。
@@ -240,7 +247,7 @@ type PreStepDecision =
 type RequestErrorAction = { kind: 'retry' } | undefined
 ```
 
-`agent/pre-step` 是请求推导前唯一的串行监听器链。`agent/turn-stopping` 在轮次没有工具或 steering（中途引导）后续时运行，先于最后一次 steering 排空。
+`agent/pre-step` 是请求推导前唯一的 waterfall（瀑布式）监听器链。`agent/turn-stopping` 在轮次没有工具或 steering（中途引导）后续时运行，先于最后一次 steering 排空。
 
 `agent/session-start` 携带 `SessionStartSource`（会话生命周期为何开始；桥接层据此匹配其 SessionStart）：
 
@@ -253,7 +260,7 @@ type SessionStartSource = 'startup' | 'resume' | 'clear' | 'compact'
 
 `Session` 是一份类型化 `SessionEvent` 的**仅追加日志**——唯一的真源。LLM 消息历史从日志*派生*（`deriveMessages()`），而非单独存储。每个条目携带单调的 `seq`、`time` 与按 `type` 判别的 `data` payload；surface 变体还可以在 `sourceEventSeqs` 中列出被引用的较早事件，并携带 `surfaceOp`。
 
-`SessionEvent` 信封的确切条件字段、十二种事件变体（`turn/start`、`turn/end`、`step/start`、`step/end`、`user/message`、`assistant/chunk`、`assistant/message`、`tool/call`、`tool/result`、`steering/message`、`todo/write`、`request/header`）、`deriveMessages()` 投影规则、`TurnTrigger`/`TurnEndReason` 原因以及执行封闭和独立事件规则都在 **[session.md](session.zh.md)** 中。日志如何持久化——`SessionPersistence` 接口、JSONL/SQLite 后端、`session/flush` 检查点、崩溃恢复与 `SessionHeader`——则在 **[persistence.md](persistence.zh.md)** 中。
+`SessionEvent` 信封的确切条件字段、十二种核心事件变体（`turn/start`、`turn/end`、`step/start`、`step/end`、`user/message`、`assistant/chunk`、`assistant/message`、`tool/call`、`tool/result`、`request/header`、`request/context`、`session/end-seed`）、`deriveMessages()` 投影规则、`TurnEndReason` 原因以及执行封闭和独立事件规则都在 **[session.md](session.zh.md)** 中。日志如何持久化——`SessionPersistence` 接口、JSONL/SQLite 后端、`session/flush` 检查点、崩溃恢复与 `SessionHeader`——则在 **[persistence.md](persistence.zh.md)** 中。
 
 ## `ToolDefinition`
 
@@ -288,14 +295,13 @@ declare module '@deepseek-ai/dsh-llm' {
 }
 ```
 
-六个规范 map 使用此模式；插件作者扩展它们：
+五个规范 map 使用此模式；插件作者扩展它们：
 
 | Map | 包 | 派生 | 目录 |
 |---|---|---|---|
 | `ContentBlockMap` | dsh-llm | `ContentBlock` | [llm-streaming.md](llm-streaming.zh.md#content-blocks-and-messages) |
 | `MessageSourceMap` | dsh-llm | `MessageSource` | [llm-streaming.md](llm-streaming.zh.md#content-blocks-and-messages) |
 | `FinishReasonMap` | dsh-llm | `FinishReason` | [llm-streaming.md](llm-streaming.zh.md#the-model-request-and-result) |
-| `TurnTriggerMap` | dsh-session | `TurnTrigger` | [session.md](session.zh.md) |
 | `TurnEndReasonMap` | dsh-session | `TurnEndReason` | [session.md](session.zh.md) |
 | `SessionEventMap` | dsh-session | `SessionEvent` | [session.md](session.zh.md) |
 
@@ -305,7 +311,7 @@ declare module '@deepseek-ai/dsh-llm' {
 
 ### 品牌化 ID
 
-在包之间传递的 ID 都经过**品牌化**——结构上是字符串，但在类型层面不可互换（不能把 `SessionId` 传给需要 `CallId` 的位置）。每种类型通过各自的工厂构造；比较、日志记录和 JSON 行为与普通字符串相同。
+在包之间传递的 ID 都经过**品牌化**——结构上是字符串，但在类型层面不可互换（不能把 `SessionId` 传给需要 `ToolCallId` 的位置）。每种类型通过各自的工厂构造；比较、日志记录和 JSON 行为与普通字符串相同。
 
 `Branded<B>` 原语位于独立的纯类型包 [dsh-brand](../../packages/util/brand) 中（没有运行时代码，也不依赖 harness 包），因此任何包都能品牌化其拥有的 id，而无需依赖无关的能力包。
 
@@ -316,7 +322,7 @@ declare module '@deepseek-ai/dsh-llm' {
 type Branded<B extends string> = string & { readonly [BRAND]: B }
 ```
 
-两个核心 ID 是 `CallId`（关联工具调用及其结果；dsh-llm）和 `SessionId`（活跃 agent 与持久会话共享的标识；dsh-session）。能力包也会品牌化各自的 id，例如 [jobs.md](jobs.zh.md) 中的 `JobId`。
+两个核心 ID 是 `ToolCallId`（关联工具调用及其结果；dsh-llm）和 `SessionId`（活跃 agent 与持久会话共享的标识；dsh-session）。能力包也会品牌化各自的 id，例如 [jobs.md](jobs.zh.md) 中的 `JobId`。
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
@@ -399,10 +405,20 @@ Discovery is unmemoized: `list()` and `resolve()` re-read the roots on every cal
 
 ```ts cordis-catalog
 /**
- * Every preset the configured roots currently supply.
- * @returns the presets, first-root-wins per id.
+ * Every preset the source currently supplies, broken ones included.
+ * @returns the presets in the source's display order.
  */
 async list(): Promise<AgentPreset[]>
+
+/**
+ * The roster off the Host: {@link list} projected to path-free rows, with
+ * the default marked and this deployment's authoring capability beside it.
+ *
+ * Whether a client can open a preset's directory is the Host's own opener
+ * capability, not a roster property — a caller needing both joins them.
+ * @returns the rows and the authoring capability.
+ */
+@Remote('list') async remoteExportList(): Promise<AgentPresetRoster>
 
 /**
  * Resolve one preset by id.
@@ -479,6 +495,15 @@ composedPreset(agentCtx: Context): string | undefined
 async read(id: string): Promise<string>
 
 /**
+ * One preset's composition text with the roster row it belongs to.
+ * @param agentPreset - the preset id.
+ * @returns the composition beside its trust and published metadata.
+ * @throws {TypertRemoteFailure} `bad-request` for an empty id, or
+ * `agent-preset-not-found` when no configured root supplies it.
+ */
+@Remote('read') async readDocument(agentPreset: string): Promise<AgentPresetDocument>
+
+/**
  * Create a locally authored preset by copying an existing one whole.
  *
  * Copy is the only authoring write. Composition text never crosses this
@@ -496,11 +521,32 @@ async read(id: string): Promise<string>
 async copy(from: string, id: string, name?: string): Promise<void>
 
 /**
+ * Copy one preset through the Remote API.
+ * @param from - the source preset id.
+ * @param id - the new preset id.
+ * @param name - the copy's optional display name.
+ * @returns once the copy is stored.
+ * @throws {TypertRemoteFailure} with the corresponding stable preset code
+ * and details when the copy is refused.
+ */
+@Remote('copy') async remoteExportCopy(from: string, id: string, name?: string): Promise<void>
+
+/**
  * Delete a locally authored preset.
+ *
  * @param id - the preset id.
  * @throws when the preset is unknown or ships with the deployment.
  */
 async remove(id: string): Promise<void>
+
+/**
+ * Delete one preset through the Remote API.
+ * @param id - the preset id.
+ * @returns once the preset is deleted.
+ * @throws {TypertRemoteFailure} with the corresponding stable preset code
+ * and details when deletion is refused.
+ */
+@Remote('deletePreset') async remoteExportDelete(id: string): Promise<void>
 
 /**
  * One agent's instance of a service its preset mounted.
@@ -534,13 +580,25 @@ serviceFor<K extends string & keyof Context>(agent: { ctx: Context }, name: K): 
  * state to restore. The re-link runs through the binding this roster kept
  * from the agent's mount — dsh-scope's only re-link authority. An agent
  * that never composed one has nothing to re-link: the switch is then the
- * agent's first bind, exactly a mount.
+ * agent's first bind, exactly a mount. A committed re-link emits
+ * `tools/change` because changing the parent scope changes the Agent's
+ * resolved tool set without adding or removing registry entries.
  * @param agentCtx - the agent's scope context.
  * @param id - the preset to compose the agent from instead.
  * @returns the preset now installed.
  * @throws when the preset is unknown or its composition is unusable.
  */
 async recompose(agentCtx: Context, id: string): Promise<AgentPreset>
+
+/**
+ * Compose a blank session's agent from a different preset and record it.
+ * @param agent - the session's live agent, resolved from the wire identity.
+ * @param agentPreset - the preset to compose the agent from instead.
+ * @returns the preset id that was recorded.
+ * @throws {TypertRemoteFailure} with `bad-request`, `agent-preset-locked`,
+ * `agent-preset-not-found`, or `agent-preset-invalid` when refused.
+ */
+@Remote('select') async select(agent: Agent, agentPreset: string): Promise<string>
 
 /**
  * The standing scope key of one preset, for a host reader with no agent.
@@ -559,6 +617,68 @@ async standingKeyFor(id?: string): Promise<ScopeKey>
 Types: [ScopeKey](scope.zh.md)
 
 Source: [`packages/preset/agent-presets/src/index.ts`](../../packages/preset/agent-presets/src/index.ts)
+
+<a id="ctxagentpresetsource--agentpresetsource-abstract-seam"></a>
+
+### `ctx.agentPresetSource` — `AgentPresetSource` (abstract seam)
+
+Where one deployment's presets come from and how they are authored.
+
+Every method takes a preset the source itself listed: `preset.path` is the source-owned locator (the composition file path for the filesystem source; another source may use a non-file locator) and the registry never interprets it.
+
+```ts cordis-catalog
+/**
+ * Every preset this source supplies, broken ones included (`broken` set).
+ * Unmemoized: each call reflects the source's current state.
+ * @returns the presets in display order.
+ */
+abstract list(): Promise<AgentPreset[]>
+
+/**
+ * Opaque identity of a preset's current composition.
+ *
+ * A changed value starts a new standing generation for sessions created
+ * afterwards; an unreadable composition yields `undefined`, which serves the
+ * generation already mounted rather than failing the session.
+ * @param preset - a preset this source listed.
+ * @returns the stamp, or `undefined` when the composition cannot be read.
+ */
+abstract stamp(preset: AgentPreset): Promise<string | undefined>
+
+/**
+ * The rows to mount, the stamp they were read under, and the base URL
+ * relative row specifiers resolve against.
+ * @param preset - a preset this source listed.
+ * @returns the composition.
+ * @throws when the composition cannot be read or is not a list of rows.
+ */
+abstract composition(preset: AgentPreset): Promise<PresetComposition>
+
+/**
+ * The composition's source text, for the authoring read.
+ * @param preset - a preset this source listed.
+ * @returns the text exactly as stored.
+ */
+abstract read(preset: AgentPreset): Promise<string>
+
+/**
+ * Create a locally authored preset by copying an existing one whole.
+ * @param source - the preset the copy starts from; any trust is accepted.
+ * @param id - the new preset's id.
+ * @param name - display name for the copy; absent falls back to the id.
+ * @throws when the id is unusable or already occupied, or the source is not authorable.
+ */
+abstract copy(source: AgentPreset, id: string, name?: string): Promise<void>
+
+/**
+ * Delete a locally authored preset.
+ * @param preset - a preset this source listed.
+ * @throws when the preset ships with the deployment or is not this source's to delete.
+ */
+abstract remove(preset: AgentPreset): Promise<void>
+```
+
+Source: [`packages/preset/agent-presets/src/source.ts`](../../packages/preset/agent-presets/src/source.ts)
 
 <a id="ctxagents--agentregistry"></a>
 

@@ -103,7 +103,7 @@ export class PerplexitySearchProvider implements WebSearchProvider {
     try {
       response = await fetch(`${this.options.baseURL}/chat/completions`, {
         method: 'POST',
-        redirect: 'error',
+        redirect: 'manual',
         headers: {
           'authorization': `Bearer ${this.options.apiKey}`,
           'content-type': 'application/json',

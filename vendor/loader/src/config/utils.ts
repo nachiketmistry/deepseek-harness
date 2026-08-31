@@ -1,12 +1,24 @@
 import { valueMap } from '@deepseek-ai/cosmokit'
 
-// eslint-disable-next-line no-new-func
-/** Evaluate a JavaScript expression against a loader context scope. */
-export const evaluate = new Function('ctx', 'expr', `
+type Evaluator = (ctx: object, expr: string) => any
+
+let evaluator: Evaluator | undefined
+
+/**
+ * Evaluate a JavaScript expression against a loader context scope. The
+ * evaluator is compiled on first use, not at module load: a host that forbids
+ * code generation from strings (workerd) can still import the Loader and
+ * mount trees whose rows carry no `!!js` expressions.
+ */
+export const evaluate: Evaluator = (ctx, expr) => {
+  // eslint-disable-next-line no-new-func
+  evaluator ??= new Function('ctx', 'expr', `
   with (ctx) {
     return eval(expr)
   }
-`) as ((ctx: object, expr: string) => any)
+`) as Evaluator
+  return evaluator(ctx, expr)
+}
 
 /** Recursively replace YAML `!js` expression nodes with evaluated values. */
 export function interpolate(ctx: object, value: any) {

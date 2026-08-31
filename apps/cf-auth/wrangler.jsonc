@@ -1,0 +1,27 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "dsh-cf-auth",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-08-20",
+  // Required for the Postgres driver: Hyperdrive speaks TCP through node:net.
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "observability": { "enabled": true },
+  // Neon `dsh-auth`, reached through Hyperdrive's regional pool so an auth
+  // request pays no TCP+TLS handshake. Points at Neon's DIRECT endpoint:
+  // Hyperdrive pools for itself, and stacking it on Neon's pooler is wrong.
+  "hyperdrive": [
+    { "binding": "HYPERDRIVE", "id": "3e40b3861b9b41c3afff22801d7d8404" }
+  ],
+  // Account-level Secrets Store, so signing material is not per-Worker state
+  // and an auth redeploy never re-mints it.
+  "secrets_store_secrets": [
+    { "binding": "BETTER_AUTH_SECRET", "store_id": "9dc65a2fdc8a47a1a78d629897d46b3d", "secret_name": "BETTER_AUTH_SECRET" },
+    { "binding": "GOOGLE_CLIENT_ID", "store_id": "9dc65a2fdc8a47a1a78d629897d46b3d", "secret_name": "GOOGLE_CLIENT_ID" },
+    { "binding": "GOOGLE_CLIENT_SECRET", "store_id": "9dc65a2fdc8a47a1a78d629897d46b3d", "secret_name": "GOOGLE_CLIENT_SECRET" }
+  ],
+  "vars": {
+    "AUTH_BASE_URL": "https://dsh-cf-auth.shytiger.workers.dev",
+    "AUTH_TRUSTED_ORIGINS": "https://dsh-cf-web.shytiger.workers.dev"
+  }
+}

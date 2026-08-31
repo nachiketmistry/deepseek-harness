@@ -50,8 +50,10 @@ const install: InvariantInstaller = (ctx, fail) => {
   // Note](../../../../.agents/notes/implemented/architecture/2026-08-10-host-plane-ownership-after-presets.md)
   // for why the warning beside it is advisory while this one fails.
   //
-  // Two conditions, each load-bearing. `context.agent` is what makes this an
-  // AGENT assembly: a scope-only assembly — a cold read resolving presenters
+  // A composed roster is the only precondition: the source behind it is a
+  // required injection, so a deployment with no roster is one that does not
+  // mount `agentPresets` at all. Two further conditions, each load-bearing.
+  // `context.agent` is what makes this an AGENT assembly: a scope-only assembly — a cold read resolving presenters
   // in a standing key, a diagnostic — is not an agent and must not be judged
   // on whether it joined anything. And assembly rather than publication is the
   // moment that matters, because an unjoined agent is legal until it addresses
@@ -60,8 +62,7 @@ const install: InvariantInstaller = (ctx, fail) => {
   ctx.on('system-prompt/assemble', (_assembly, context, next) => {
     const presets = ctx.get('agentPresets')
     const agent = context.agent
-    if (presets !== undefined && presets.roots.length > 0
-      && agent !== undefined && presets.composedPreset(agent.ctx) === undefined) {
+    if (presets !== undefined && agent !== undefined && presets.composedPreset(agent.ctx) === undefined) {
       fail(
         `agent "${agent.id}" addressed a model without joining any agent preset while a roster is `
         + 'composed; its tools, prompt sections, and skill catalog resolve against the empty global layer',

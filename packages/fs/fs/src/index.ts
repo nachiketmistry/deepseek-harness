@@ -126,6 +126,19 @@ export abstract class FileSystem extends Service {
   abstract processPath(target: FsTarget): string
 
   /**
+   * Map an absolute path from the harness host into this filesystem's
+   * execution world when both paths identify the same file. The base provider
+   * exposes no mapping; host-backed or explicitly shared backends override it.
+   * @param hostPath - absolute path in the harness host filesystem.
+   * @returns the process path for the same file, or undefined when this
+   *   execution world cannot read that host file.
+   */
+  processPathFromHostPath(hostPath: string): string | undefined {
+    void hostPath
+    return undefined
+  }
+
+  /**
    * Return the canonical `file:` URI for a target in this filesystem's
    * execution world. Backends own URI encoding because the host platform may
    * differ from the execution platform.
@@ -206,6 +219,15 @@ export abstract class FileSystem extends Service {
    * @returns one entry per direct child, in stable name order.
    */
   abstract listDir(target: FsTarget, signal?: AbortSignal): Promise<FsDirEntry[]>
+
+  /**
+   * Ensure a directory exists, creating missing ancestors, and resolve it.
+   * An existing directory is left as it is; an existing non-directory rejects.
+   * @param path - the directory path; relative paths resolve against `opts.cwd`.
+   * @param opts - optional cwd override and cancellation signal.
+   * @returns the directory's resolved target.
+   */
+  abstract ensureDirectory(path: string, opts?: { cwd?: string; signal?: AbortSignal }): Promise<FsTarget>
 
   /**
    * Atomically create or replace UTF-8 text. `expected` guards intent and

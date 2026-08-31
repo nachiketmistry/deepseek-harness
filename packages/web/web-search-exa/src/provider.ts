@@ -100,7 +100,7 @@ export class ExaSearchProvider implements WebSearchProvider {
     try {
       response = await fetch(`${this.options.baseURL}/search`, {
         method: 'POST',
-        redirect: 'error',
+        redirect: 'manual',
         headers: {
           'authorization': `Bearer ${this.options.apiKey}`,
           'content-type': 'application/json',

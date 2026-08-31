@@ -16,7 +16,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
-import HttpServer from '@deepseek-ai/dsh-host-webserver'
+import { WebServer } from '@deepseek-ai/dsh-host-webserver'
+import NodeWebServer from '@deepseek-ai/dsh-host-webserver-node'
 import type { DirectoryPicker } from '@deepseek-ai/dsh-host-directory-picker'
 import BrowseDirectoryPicker from '@deepseek-ai/dsh-host-directory-picker-browse'
 import NativeDirectoryPicker from '@deepseek-ai/dsh-host-directory-picker-native'
@@ -95,7 +96,7 @@ async function loadComposition(
   root = await mkdtemp(join(tmpdir(), 'dsh-directory-picker-auto-'))
   const configPath = join(root, 'cordis.yml')
   await writeFile(configPath, [
-    "- name: '@deepseek-ai/dsh-host-webserver'",
+    "- name: '@deepseek-ai/dsh-host-webserver-node'",
     '  config:',
     `    host: '${bindHost}'`,
     '    port: 0',
@@ -108,7 +109,7 @@ async function loadComposition(
   await context.plugin(Loader)
   context.loader.builtins.include = Include
   const modules = new Map<string, unknown>([
-    ['@deepseek-ai/dsh-host-webserver', HttpServer],
+    ['@deepseek-ai/dsh-host-webserver-node', NodeWebServer],
     [AUTO, DirectoryPickerAuto],
     [NATIVE, NativeDirectoryPicker],
     [BROWSE, BrowseDirectoryPicker],
@@ -138,6 +139,14 @@ function entryNames(ctx: Context): string[] {
   return [...ctx.loader.entries()].map(entry => entry.options.name)
 }
 
+/** The Include tree that backs the booted `cordis.yml` file. */
+function includeTree(ctx: Context): Include {
+  const include = [...ctx.loader.entries()]
+    .find(entry => entry.options.name === 'cordis:include')?.subtree as Include | undefined
+  if (include === undefined) throw new Error('expected the root Include tree')
+  return include
+}
+
 /**
  * Force every signal of an attended host on any platform: no SSH launch, a
  * display, and a PATH holding one executable chooser binary so the real
@@ -153,6 +162,21 @@ function stubAttendedHost(): void {
   vi.stubEnv('SSH_TTY', '')
   vi.stubEnv('DISPLAY', ':0')
 }
+
+describe('carrier address', () => {
+  it('refuses a webServer provider that owns no listener', async () => {
+    class ListenerlessWebServer extends WebServer {
+      get address(): undefined { return undefined }
+    }
+    const ctx = new Context()
+    await ctx.plugin(Loader)
+    new ListenerlessWebServer(ctx)
+    await expect(DirectoryPickerAuto.apply(ctx)).rejects.toThrow(
+      'directory-picker-auto: the webServer provider owns no listener; a native chooser needs the Node carrier',
+    )
+    await ctx.fiber.dispose()
+  })
+})
 
 describe('real Loader composition', () => {
   // The 60s budget covers this file's static imports (webserver plus both
@@ -188,10 +212,10 @@ describe('real Loader composition', () => {
     // behavior, not the chooser's); await that debounced write so it cannot
     // race the temp-dir removal, and pin that the persisted row is the
     // chooser itself — the resolved backend still never reaches the file.
-    await expect.poll(
-      async () => await readFile(configPath, 'utf8'),
-      { timeout: 15_000 },
-    ).toContain('disabled: true')
+    // stop() drains the Include write queue, so this assertion does not depend
+    // on the debounce timer racing Windows coverage load.
+    await includeTree(ctx).stop()
+    expect(await readFile(configPath, 'utf8')).toContain('disabled: true')
     expect(await readFile(configPath, 'utf8')).not.toContain(NATIVE)
   })
 
@@ -240,8 +264,10 @@ describe('real Loader composition', () => {
     await expect(autoEntry.fiber!.dispose()).resolves.not.toThrow()
     expect(entryNames(ctx)).not.toContain(NATIVE)
     expect(entryNames(ctx)).not.toContain(NATIVE_SURFACE)
-    // Same self-dispose persistence as above: let the write land before teardown.
-    await expect.poll(async () => await readFile(configPath, 'utf8')).toContain('disabled: true')
+    // Same self-dispose persistence as above: drain the Include write queue
+    // deterministically before asserting the persisted row.
+    await includeTree(ctx).stop()
+    expect(await readFile(configPath, 'utf8')).toContain('disabled: true')
     expect(renameControl.injectedFailures).toBe(1)
     expect(renameControl.remainingFailures).toBe(0)
     expect(renameControl.attempts).toBeGreaterThanOrEqual(2)
@@ -251,9 +277,7 @@ describe('real Loader composition', () => {
     stubAttendedHost()
     const { ctx } = await loadComposition('127.0.0.1')
     const autoEntry = [...ctx.loader.entries()].find(entry => entry.options.name === AUTO)!
-    const include = [...ctx.loader.entries()]
-      .find(entry => entry.options.name === 'cordis:include')?.subtree as Include | undefined
-    if (include === undefined) throw new Error('expected the root Include tree')
+    const include = includeTree(ctx)
     renameControl.failureCode = 'EIO'
     renameControl.remainingFailures = 1
 

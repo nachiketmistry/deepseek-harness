@@ -127,6 +127,12 @@ class TestFileSystem extends FileSystem {
     return result
   }
 
+  override async ensureDirectory(path: string): Promise<FsTarget> {
+    const target = await this.resolve(path)
+    await mkdir(target.displayPath, { recursive: true })
+    return target
+  }
+
   override async writeText(target: FsTarget, content: string): Promise<FsWriteOutcome> {
     await mkdir(dirname(target.displayPath), { recursive: true })
     await writeFile(target.displayPath, content)

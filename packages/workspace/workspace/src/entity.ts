@@ -8,12 +8,12 @@
  * @module @deepseek-ai/dsh-workspace/src/entity
  */
 
-import { stat } from 'node:fs/promises'
 import type { SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
 import type { WorkspaceRecord } from './spec.ts'
 import type { Workspace, WorkspaceId } from './types.ts'
-import { realpathNormalize } from './paths.ts'
+import { realpathDirectory } from './paths.ts'
+import type { FileSystem } from '@deepseek-ai/dsh-fs'
 
 /** An insertSessionBefore request named a session or anchor not on the account (storage failures stay plain errors). */
 export class WorkspaceMoveInvalidError extends Error {
@@ -60,6 +60,9 @@ export interface WorkspaceEntityHost {
    * @param path - Canonical existing directory from the immutable header cwd.
    */
   rememberSessionPath(id: SessionId, path: string): void
+
+  /** The composed filesystem, the canon every directory check goes through. */
+  readonly fs: FileSystem
 }
 
 /** Chain-slot abort sentinel thrown by the update fn when the record needs no change; only `mutate` observes it. */
@@ -121,18 +124,12 @@ export class WorkspaceEntity implements Workspace {
       }
       let cwd: string
       try {
-        cwd = await realpathNormalize(header.cwd)
+        cwd = await realpathDirectory(this.host.fs, header.cwd)
       } catch (error) {
         throw new Error(
           `cannot attach session '${sessionId}' to workspace '${this.record.path}': `
-          + `its cwd '${header.cwd}' does not resolve, so it cannot be validated`,
+          + `its cwd '${header.cwd}' does not resolve to a directory, so it cannot be validated`,
           { cause: error },
-        )
-      }
-      if (!(await stat(cwd)).isDirectory()) {
-        throw new Error(
-          `cannot attach session '${sessionId}' to workspace '${this.record.path}': `
-          + `its cwd '${header.cwd}' is not a directory`,
         )
       }
       if (cwd !== this.record.path) {
@@ -179,10 +176,11 @@ export class WorkspaceEntity implements Workspace {
 
   async status(): Promise<'ok' | 'missing-dir'> {
     try {
-      return (await stat(this.record.path)).isDirectory() ? 'ok' : 'missing-dir'
+      await realpathDirectory(this.host.fs, this.record.path)
+      return 'ok'
     } catch {
-      // Any stat failure (ENOENT, dangling parent, permission loss) means the
-      // directory is not usable right now; the record itself never mutates.
+      // Any resolution failure (ENOENT, dangling parent, permission loss, not a
+      // directory) means the directory is not usable right now; the record itself never mutates.
       return 'missing-dir'
     }
   }

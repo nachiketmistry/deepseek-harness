@@ -1,0 +1,7 @@
+# Copy to `.dev.vars` and fill in. Gitignored; wrangler dev loads it into the
+# Worker's environment, which is where the credentials provider reads a
+# reference it has no stored value for.
+#
+# Without this the GUI runs, and every model turn fails on a missing
+# credential; the Models page can store a key instead, per Durable Object.
+DEEPSEEK_API_KEY="sk-..."

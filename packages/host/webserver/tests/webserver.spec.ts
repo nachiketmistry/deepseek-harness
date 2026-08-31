@@ -1,210 +1,134 @@
 /**
- * REAL-composition coverage: a test-only cordis.yml booted through the
- * vendored Loader mounts the webserver row, and every assertion observes the
- * user-visible HTTP surface of the running server (routing precedence, index
- * taps, fallback-seat semantics, per-request error containment, teardown).
+ * Service Definition coverage: the abstract `WebServer` registry and its Fetch
+ * dispatch, driven through a minimal concrete subclass with no listener. The
+ * listening surface (real sockets, streaming, upgrades) belongs to the Node
+ * provider's suite in `@deepseek-ai/dsh-host-webserver-node`.
  */
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { once } from 'node:events'
-import { connect } from 'node:net'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
-import { afterEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import Loader from '@deepseek-ai/cordis-plugin-loader'
-import Include from '@deepseek-ai/cordis-plugin-include'
-import HttpServer, { renderIndexInjections } from '../src/index.ts'
+import InvariantRegistry from '@deepseek-ai/dsh-invariants'
+import { WEBSOCKET_OPEN, WebServer, renderIndexInjections, type WebSocketRoute } from '../src/index.ts'
+import * as WebServerInvariant from '../src/invariant.ts'
 
-let root: string | undefined
-let context: Context | undefined
-
-afterEach(async () => {
-  await context?.fiber.dispose()
-  context = undefined
-  if (root !== undefined) await rm(root, { recursive: true, force: true })
-  root = undefined
-})
-
-/** Write a cordis.yml with one webserver row, then boot it through the real Loader. */
-async function loadComposition(port = 0): Promise<Context> {
-  root = await mkdtemp(join(tmpdir(), 'dsh-webserver-loader-'))
-  const configPath = join(root, 'cordis.yml')
-  await writeFile(configPath, [
-    "- name: '@deepseek-ai/dsh-host-webserver'",
-    '  config:',
-    "    host: '127.0.0.1'",
-    `    port: ${String(port)}`,
-    '',
-  ].join('\n'))
-
-  context = new Context()
-  context.baseUrl = pathToFileURL(root).href + '/'
-  await context.plugin(Loader)
-  context.loader.builtins.include = Include
-  const modules = new Map<string, unknown>([
-    ['@deepseek-ai/dsh-host-webserver', HttpServer],
-  ])
-  context.loader.internal = {
-    version: 'v2',
-    async import(specifier: string) {
-      if (!modules.has(specifier)) throw new Error(`unexpected Loader import: ${specifier}`)
-      return modules.get(specifier)
-    },
-  } as unknown as NonNullable<typeof context.loader.internal>
-  await context.loader.create({
-    name: 'cordis:include',
-    config: { path: pathToFileURL(configPath).href },
-  })
-  await context.loader.await()
-  return context
+/** A carrier with no listener of its own: the platform-driven provider shape. */
+class TestWebServer extends WebServer {
+  override get address(): undefined {
+    return undefined
+  }
 }
 
-/** GET (by default) one path against the running server; returns status plus a body prefix. */
-async function request(port: number, path: string, init?: RequestInit): Promise<{ status: number; body: string }> {
-  const response = await fetch(`http://127.0.0.1:${String(port)}${path}`, init)
-  return { status: response.status, body: (await response.text()).slice(0, 80) }
+const text = (body: string, status = 200): Response => new Response(body, { status })
+
+/** Boot one context carrying the test carrier. */
+async function boot(): Promise<{ ctx: Context; server: WebServer }> {
+  const ctx = new Context()
+  await ctx.plugin(TestWebServer)
+  return { ctx, server: ctx.webServer }
 }
 
-/** Open one raw upgrade request and return after the handler writes its response. */
-async function upgrade(port: number, path: string): Promise<ReturnType<typeof connect>> {
-  const socket = connect(port, '127.0.0.1')
-  await once(socket, 'connect')
-  const response = once(socket, 'data')
-  socket.write([
-    `GET ${path} HTTP/1.1`,
-    `Host: 127.0.0.1:${String(port)}`,
-    'Connection: Upgrade',
-    'Upgrade: dsh-test',
-    '',
-    '',
-  ].join('\r\n'))
-  const [data] = await response as [Buffer]
-  expect(String(data)).toContain('101 Switching Protocols')
-  return socket
+/** Dispatch one request and read status plus body text. */
+async function dispatch(server: WebServer, path: string, init?: RequestInit): Promise<{ status: number; body: string }> {
+  const response = await server.fetch(new Request(`http://127.0.0.1${path}`, init))
+  return { status: response.status, body: await response.text() }
 }
 
-describe('real Loader composition', () => {
-  // Real-Loader composition resolves workspace packages through tsx at test
-  // time; first resolution after the host/client program split is slow enough
-  // to trip the default 5s budget on cold caches.
-  it('serves registered routes, index taps, and the fallback-seat semantics', { timeout: 60_000 }, async () => {
-    const loaded = await loadComposition()
-    const unloaded = [...loaded.loader.entries()]
-      .filter(entry => entry.fiber === undefined && !entry.disabled)
-      .map(entry => entry.options.name)
-    expect(unloaded).toEqual([])
-
-    const server = loaded.webServer
-    expect(server).toBeInstanceOf(HttpServer)
-    const port = server.port
-    expect(port).toBeGreaterThan(0)
+describe('WebServer route registry', () => {
+  it('dispatches exact over longest prefix over the fallback seat over 404', async () => {
+    const { server } = await boot()
+    expect(server.address).toBeUndefined()
+    expect(server).toBeInstanceOf(WebServer)
 
     // Routing precedence: exact beats prefix, longest prefix wins, a prefix
     // route answers its own path, and routes own their method handling
     // (POST reaches a registered prefix; 405 is fallback-only semantics).
-    server.register({ kind: 'exact', path: '/probe', handler: (_req, res) => { res.writeHead(200); res.end('EXACT') } })
-    server.register({ kind: 'prefix', path: '/api', handler: (_req, res) => { res.writeHead(200); res.end('API') } })
-    server.register({ kind: 'prefix', path: '/api/deep', handler: (_req, res) => { res.writeHead(200); res.end('DEEP') } })
-    expect(await request(port, '/probe')).toMatchObject({ status: 200, body: 'EXACT' })
-    expect(await request(port, '/api/anything')).toMatchObject({ status: 200, body: 'API' })
-    expect(await request(port, '/api/deep/leaf')).toMatchObject({ status: 200, body: 'DEEP' })
-    expect(await request(port, '/api')).toMatchObject({ status: 200, body: 'API' })
-    expect(await request(port, '/api/anything', { method: 'POST' })).toMatchObject({ status: 200, body: 'API' })
+    server.register({ kind: 'exact', path: '/probe', handler: () => text('EXACT') })
+    // Longest prefix wins regardless of registration order.
+    server.register({ kind: 'prefix', path: '/api/deep', handler: () => text('DEEP') })
+    server.register({ kind: 'prefix', path: '/api', handler: () => text('API') })
+    server.register({ kind: 'prefix', path: '/api/deeper', handler: () => text('DEEPER') })
+    server.register({ kind: 'exact', path: '/api/deep/leaf', handler: async () => text('LEAF') })
+    expect(await dispatch(server, '/probe')).toEqual({ status: 200, body: 'EXACT' })
+    expect(await dispatch(server, '/api/anything')).toEqual({ status: 200, body: 'API' })
+    expect(await dispatch(server, '/api/deep/leaf')).toEqual({ status: 200, body: 'LEAF' })
+    expect(await dispatch(server, '/api/deep/other')).toEqual({ status: 200, body: 'DEEP' })
+    expect(await dispatch(server, '/api/deeper/x')).toEqual({ status: 200, body: 'DEEPER' })
+    expect(await dispatch(server, '/api')).toEqual({ status: 200, body: 'API' })
+    expect(await dispatch(server, '/apix')).toEqual({ status: 404, body: '' })
+    expect(await dispatch(server, '/api/anything', { method: 'POST' })).toEqual({ status: 200, body: 'API' })
+    // Query strings never take part in matching.
+    expect(await dispatch(server, '/probe?x=1')).toEqual({ status: 200, body: 'EXACT' })
 
     // Fallback seat: 404 while unclaimed; the owner answers everything no
-    // named route matches; index taps are the owner's to apply; the seat
-    // admits exactly one owner and the disposer releases it.
-    expect((await request(port, '/no/such/route')).status).toBe(404)
-    const untap = server.tapIndex(html => html.replace('<head>', '<head><script>window.__T__=1</script>'))
-    expect(server.applyIndexTaps('<head></head>')).toContain('__T__')
-    const releaseFallback = server.registerFallback((req, res) => {
-      // Decode like a real static server would — a malformed %-escape throws
-      // here, probing the webserver's per-request error containment.
-      decodeURIComponent(new URL(req.url ?? '/', 'http://x').pathname)
-      res.writeHead(200, { 'content-type': 'text/html' })
-      res.end(server.applyIndexTaps('<head></head><body>shell</body>'))
-    })
-    expect(() => server.registerFallback(() => {})).toThrow(/fallback already registered/)
-    expect((await request(port, '/no/such/route')).body).toContain('__T__')
-    untap()
-    expect((await request(port, '/no/such/route')).body).not.toContain('__T__')
-    expect((await request(port, '/no/such/route')).body).toContain('shell')
-
-    // Per-request error containment: a malformed %-escape answers 400 and the
-    // server keeps serving afterwards (no process-level failure path).
-    expect((await request(port, '/%zz')).status).toBe(400)
-    expect(await request(port, '/probe')).toMatchObject({ status: 200, body: 'EXACT' })
-
-    // Duplicate (kind, path) is a misconfiguration and throws; the disposer
-    // restores registrability (register/disposer symmetry).
-    expect(() => server.register({ kind: 'exact', path: '/probe', handler: () => {} }))
-      .toThrow(/duplicate exact route/)
-    const disposeOnce = server.register({ kind: 'exact', path: '/once', handler: (_req, res) => { res.writeHead(200); res.end('ONCE') } })
-    expect(await request(port, '/once')).toMatchObject({ status: 200, body: 'ONCE' })
-    disposeOnce()
-    expect((await request(port, '/once')).body).toContain('shell') // back to the fallback owner
-    expect(() => server.register({ kind: 'exact', path: '/once', handler: () => {} })).not.toThrow()
-
-    // Releasing the seat restores the unclaimed 404 and registrability.
+    // named route matches; the seat admits exactly one owner and the
+    // disposer releases it.
+    expect(await dispatch(server, '/no/such/route')).toEqual({ status: 404, body: '' })
+    const releaseFallback = server.registerFallback(request => text(`shell ${new URL(request.url).pathname}`))
+    expect(() => server.registerFallback(() => text(''))).toThrow(/fallback already registered/)
+    expect(await dispatch(server, '/no/such/route')).toEqual({ status: 200, body: 'shell /no/such/route' })
+    expect(await dispatch(server, '/probe')).toEqual({ status: 200, body: 'EXACT' })
     releaseFallback()
-    expect((await request(port, '/no/such/route')).status).toBe(404)
-    expect(() => server.registerFallback(() => {})).not.toThrow()
+    expect(await dispatch(server, '/no/such/route')).toEqual({ status: 404, body: '' })
+    expect(() => server.registerFallback(() => text(''))).not.toThrow()
 
-    // Upgrade routes match exact pathnames, reject duplicate ownership, and
-    // become registrable again after disposal. The accepted socket stays open
-    // so the teardown assertion also covers upgraded-connection ownership.
-    let upgradedServerClosed = false
-    const disposeUpgrade = server.registerUpgrade({
-      path: '/events',
-      handler: (_req, socket) => {
-        socket.once('close', () => { upgradedServerClosed = true })
-        socket.write('HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: dsh-test\r\n\r\n')
-      },
-    })
-    expect(() => server.registerUpgrade({ path: '/events', handler: () => {} }))
-      .toThrow(/duplicate upgrade route/)
-    const upgraded = await upgrade(port, '/events?stream=mux')
-    disposeUpgrade()
-    expect(() => server.registerUpgrade({ path: '/events', handler: () => {} })).not.toThrow()
-
-    // The webserver contains raw-socket errors even before an upgrade handler
-    // has installed its protocol implementation.
-    server.registerUpgrade({
-      path: '/upgrade-error',
-      handler: async (_req, socket) => {
-        await Promise.resolve()
-        socket.destroy(new Error('test upgrade transport failure'))
-      },
-    })
-    const failedUpgrade = connect(port, '127.0.0.1')
-    failedUpgrade.on('error', () => { /* The server-side reset is the fixture outcome. */ })
-    await once(failedUpgrade, 'connect')
-    const failedUpgradeClosed = once(failedUpgrade, 'close')
-    failedUpgrade.write([
-      'GET /upgrade-error HTTP/1.1',
-      `Host: 127.0.0.1:${String(port)}`,
-      'Connection: Upgrade',
-      'Upgrade: dsh-test',
-      '',
-      '',
-    ].join('\r\n'))
-    await failedUpgradeClosed
-    expect(await request(port, '/probe')).toMatchObject({ status: 200, body: 'EXACT' })
-
-    // Teardown closes both ordinary and upgraded sockets before it resolves.
-    await loaded.fiber.dispose()
-    expect(upgradedServerClosed).toBe(true)
-    upgraded.destroy()
-    await expect(request(port, '/probe')).rejects.toThrow()
+    // A handler's rejection propagates to the provider.
+    server.register({ kind: 'exact', path: '/boom', handler: () => { throw new Error('handler failure') } })
+    await expect(server.fetch(new Request('http://127.0.0.1/boom'))).rejects.toThrow('handler failure')
   })
 
-  it('collects injection rows fresh per render and layers taps over the rendered rows', { timeout: 60_000 }, async () => {
-    const loaded = await loadComposition()
-    const server = loaded.webServer
+  it('rejects duplicate (kind, path) and restores registrability on dispose', async () => {
+    const { server } = await boot()
+    server.register({ kind: 'exact', path: '/probe', handler: () => text('EXACT') })
+    expect(() => server.register({ kind: 'exact', path: '/probe', handler: () => text('') }))
+      .toThrow(/duplicate exact route "\/probe"/)
+    // The same path is free in the other table.
+    server.register({ kind: 'prefix', path: '/probe', handler: () => text('PREFIX') })
+    expect(() => server.register({ kind: 'prefix', path: '/probe', handler: () => text('') }))
+      .toThrow(/duplicate prefix route "\/probe"/)
+    expect(await dispatch(server, '/probe')).toEqual({ status: 200, body: 'EXACT' })
+    expect(await dispatch(server, '/probe/child')).toEqual({ status: 200, body: 'PREFIX' })
+
+    const disposeOnce = server.register({ kind: 'exact', path: '/once', handler: () => text('ONCE') })
+    expect(await dispatch(server, '/once')).toEqual({ status: 200, body: 'ONCE' })
+    disposeOnce()
+    expect(await dispatch(server, '/once')).toEqual({ status: 404, body: '' })
+    expect(() => server.register({ kind: 'exact', path: '/once', handler: () => text('') })).not.toThrow()
+  })
+
+  it('owns exact-path upgrade routes with duplicate rejection and disposer symmetry', async () => {
+    const { server } = await boot()
+    const route: WebSocketRoute = { path: '/events', open: () => {} }
+    const dispose = server.registerUpgrade(route)
+    expect(() => server.registerUpgrade({ path: '/events', open: () => {} })).toThrow(/duplicate upgrade route "\/events"/)
+    expect(server.upgradeRoute('/events')).toBe(route)
+    expect(server.upgradeRoute('/events/child')).toBeUndefined()
+    expect(server.upgradeRoute('/other')).toBeUndefined()
+    dispose()
+    expect(server.upgradeRoute('/events')).toBeUndefined()
+    expect(() => server.registerUpgrade({ path: '/events', open: () => {} })).not.toThrow()
+    expect(WEBSOCKET_OPEN).toBe(WebSocket.OPEN)
+  })
+})
+
+describe('WebServer index rendering', () => {
+  it('applies taps in registration order and releases them once', async () => {
+    const { server } = await boot()
+    const untapA = server.tapIndex(html => `${html}A`)
+    const untapB = server.tapIndex(html => `${html}B`)
+    expect(server.applyIndexTaps('x')).toBe('xAB')
+    untapA()
+    expect(server.applyIndexTaps('x')).toBe('xB')
+    // A second release is a no-op; the remaining tap stays registered.
+    untapA()
+    expect(server.applyIndexTaps('x')).toBe('xB')
+    untapB()
+    expect(server.applyIndexTaps('x')).toBe('x')
+  })
+
+  it('collects injection rows fresh per render and layers taps over the rendered rows', async () => {
+    const { ctx, server } = await boot()
     let flag = 'dark'
-    loaded.on('webserver/index-inject', (table) => {
+    ctx.on('webserver/index-inject', (table) => {
       table.push(
         { kind: 'script', placement: 'head', text: 'window.__Q__=1' },
         { kind: 'script-src', placement: 'head', src: '/plugins/a.js?rev="1"&x=<y>' },
@@ -241,34 +165,81 @@ describe('real Loader composition', () => {
     expect(server.renderIndex('<head></head><body></body>')).toContain('window.__Q__=2')
     untap()
 
-    // Tag-less fragments: head rows prepend, body rows append.
+    // Tag-less fragments: head rows prepend, body rows append, and the
+    // boot-readiness tail follows the last body row.
     expect(renderIndexInjections('<main>x</main>', [
       { kind: 'script', placement: 'head', text: 'H' },
       { kind: 'script', placement: 'body', text: 'B' },
-    ])).toBe('<script>H</script><main>x</main><script>B</script>')
+    ])).toBe(
+      '<script>H</script><main>x</main><script>B</script>'
+      + '<script>(globalThis.__DSH_BOOT_READY__ ??= Promise.withResolvers()).resolve()</script>',
+    )
+
+    // A global without a value assigns `undefined`; attributed tags still match.
+    expect(renderIndexInjections('<HEAD lang="en"><body class="x">', [
+      { kind: 'global', name: 'flag', value: undefined },
+      { kind: 'html', placement: 'body', html: '<b/>' },
+    ])).toBe(
+      '<HEAD lang="en"><script>globalThis["flag"] = undefined</script><body class="x"><b/>'
+      + '<script>(globalThis.__DSH_BOOT_READY__ ??= Promise.withResolvers()).resolve()</script>',
+    )
+
+    // An empty table still carries the boot-readiness tail: the client entry
+    // awaits it before reading injected state, so a page with no rows must
+    // settle it rather than hang.
+    expect(renderIndexInjections('<main/>', []))
+      .toBe('<main/><script>(globalThis.__DSH_BOOT_READY__ ??= Promise.withResolvers()).resolve()</script>')
+
+    // A row of unknown kind is a programming error at the renderer.
+    expect(() => renderIndexInjections('', [{ kind: 'bogus' } as unknown as Parameters<typeof renderIndexInjections>[1][number]]))
+      .toThrow(/unknown index injection row/)
+  })
+})
+
+describe('webserver invariant companion', () => {
+  it('passes fiber teardown while route disposers stay symmetric, and tolerates a composition without a carrier', async () => {
+    const ctx = new Context()
+    await ctx.plugin(InvariantRegistry)
+    await ctx.plugin(WebServerInvariant)
+    // No webserver row yet: the teardown probe has nothing to check.
+    const probeFiber = await ctx.plugin(() => {})
+    await probeFiber.dispose()
+
+    await ctx.plugin(TestWebServer)
+    const server = ctx.webServer
+    const dispose = server.register({ kind: 'exact', path: '/live', handler: () => text('') })
+    const fiber = await ctx.plugin(() => {})
+    await expect(fiber.dispose()).resolves.toBeUndefined()
+    // The probe leaves no residue behind on its reserved paths.
+    expect(() => server.register({ kind: 'exact', path: '/__dsh_invariant_probe__', handler: () => text('') })).not.toThrow()
+    expect(() => server.registerUpgrade({ path: '/__dsh_invariant_upgrade_probe__', open: () => {} })).not.toThrow()
+    dispose()
   })
 
-  it('fails the fiber when the port is already taken (fail-loud at activation)', { timeout: 60_000 }, async () => {
-    const first = await loadComposition()
-    const takenPort = first.webServer.port
-    const firstRoot = root
-    root = undefined // keep the first composition's files until the end
-
-    let second: Context | undefined
-    try {
-      let failure: unknown
-      try {
-        await loadComposition(takenPort)
-      } catch (error) {
-        failure = error
-      }
-      second = context
-      expect(String(failure)).toMatch(/failed to apply loader entry.*EADDRINUSE/)
-    } finally {
-      await second?.fiber.dispose()
-      context = first
-      if (root !== undefined) await rm(root, { recursive: true, force: true })
-      root = firstRoot
+  it('fails a fiber lifecycle once a route disposer leaves its route registered', async () => {
+    const ctx = new Context()
+    await ctx.plugin(InvariantRegistry)
+    await ctx.plugin(WebServerInvariant)
+    await ctx.plugin(TestWebServer)
+    const server = ctx.webServer
+    const register = server.register.bind(server)
+    // A disposer that forgets its route: the second probe cycle hits the duplicate.
+    server.register = (route) => {
+      register(route)
+      return () => {}
     }
+    // The teardown-stream observer also fires at plugin publication, where the
+    // failure escapes synchronously from the registering call.
+    expect(() => ctx.plugin(() => {}))
+      .toThrow(/invariant violated by "@deepseek-ai\/dsh-host-webserver": webServer route disposer left a route registered/)
+  })
+
+  it('reserves the package name against duplicate registration', async () => {
+    const ctx = new Context()
+    await ctx.plugin(InvariantRegistry)
+    await ctx.plugin(WebServerInvariant)
+    expect(() => {
+      ctx.invariants.register('@deepseek-ai/dsh-host-webserver', () => {})
+    }).toThrow(/already registered/)
   })
 })
